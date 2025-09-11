@@ -4,12 +4,19 @@ import { Pool } from 'pg'
 import { createPool } from 'mysql2'
 import Database from 'better-sqlite3'
 
+const createdDialects: Record<string, Dialect> = {}
+
 export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
+  console.log(process.env)
   DB ??= (process.env.DB as any) || 'sqlite'
+
+  if (createdDialects[DB]) {
+    return createdDialects[DB]
+  }
 
   if (DB === 'postgres') {
     console.log('Using Postgres')
-    return new PostgresDialect({
+    createdDialects[DB] = new PostgresDialect({
       pool: new Pool({
         host: 'localhost',
         user: process.env.POSTGRES_USER ?? 'postgres',
@@ -21,7 +28,7 @@ export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
     })
   } else if (DB === 'mysql') {
     console.log('Using MySQL')
-    return new MysqlDialect({
+    createdDialects[DB] = new MysqlDialect({
       pool: createPool({
         database: process.env.MYSQL_DATABASE ?? 'test',
         host: process.env.MYSQL_HOST ?? 'localhost',
@@ -34,7 +41,9 @@ export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
   }
 
   console.log('Using SQLite')
-  return new SqliteDialect({
+  createdDialects[DB] = new SqliteDialect({
     database: new Database(':memory:'),
   })
+
+  return createdDialects[DB]
 }
