@@ -6,9 +6,9 @@ import Database from 'better-sqlite3'
 
 const createdDialects: Record<string, Dialect> = {}
 
-export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
-  console.log(process.env)
-  DB ??= (process.env.DB as any) || 'sqlite'
+export default (DB: 'postgres' | 'mysql' | 'sqlite'): Dialect => {
+  console.log(process.env.DB)
+  DB ||= (process.env.DB as any) || 'sqlite'
 
   if (createdDialects[DB]) {
     return createdDialects[DB]
