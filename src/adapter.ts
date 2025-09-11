@@ -1,20 +1,12 @@
-import { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
+import type { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
 import { _ } from '@feathersjs/commons'
-import { AdapterBase, PaginationOptions, AdapterQuery, getLimit } from '@feathersjs/adapter-commons'
+import type { PaginationOptions, AdapterQuery } from '@feathersjs/adapter-commons'
+import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
 import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
-import { errorHandler } from './error-handler'
-import { KyselyAdapterOptions, KyselyAdapterParams } from './declarations'
-import {
-  ComparisonOperatorExpression,
-  DeleteQueryBuilder,
-  DeleteResult,
-  InsertQueryBuilder,
-  InsertResult,
-  SelectQueryBuilder,
-  UpdateQueryBuilder,
-  UpdateResult,
-} from 'kysely'
+import { errorHandler } from './error-handler.js'
+import type { KyselyAdapterOptions, KyselyAdapterParams } from './declarations.js'
+import type { ComparisonOperatorExpression, InsertQueryBuilder, SelectQueryBuilder } from 'kysely'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -27,18 +19,14 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $ilike: 'ilike',
   $in: 'in',
   $nin: 'not in',
+  $eq: '=',
   $ne: '!=',
 }
-
-type DeleteOrInsertBuilder =
-  | DeleteQueryBuilder<any, string, DeleteResult>
-  | InsertQueryBuilder<any, string, InsertResult>
-  | UpdateQueryBuilder<any, string, string, UpdateResult>
 
 // const RETURNING_CLIENTS = ['postgresql', 'pg', 'oracledb', 'mssql']
 
 export class KyselyAdapter<
-  Result,
+  Result extends Record<string, any>,
   Data = Partial<Result>,
   ServiceParams extends KyselyAdapterParams<any> = KyselyAdapterParams,
   PatchData = Partial<Data>,
@@ -74,6 +62,10 @@ export class KyselyAdapter<
     return this.getModel()
   }
 
+  getOptions(params: ServiceParams): KyselyAdapterOptions & { id: string } {
+    return this.getOptions(params) as KyselyAdapterOptions & { id: string }
+  }
+
   getModel(params: ServiceParams = {} as ServiceParams) {
     const { Model } = this.getOptions(params)
     return Model
@@ -92,7 +84,7 @@ export class KyselyAdapter<
   }
 
   createQuery(options: KyselyAdapterOptions, filters: any, query: any) {
-    const q = this.startSelectQuery(options, filters)
+    const q = this.startSelectQuery(options, filters, query)
     const qWhere = this.applyWhere(q, query)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
@@ -101,9 +93,10 @@ export class KyselyAdapter<
     return qSorted
   }
 
-  startSelectQuery(options: KyselyAdapterOptions, filters: any) {
+  startSelectQuery(options: KyselyAdapterOptions, filters: any, query: any) {
     const { name, id: idField } = options
-    const q = this.Model.selectFrom(name)
+    let q = this.Model.selectFrom(name)
+    q = this.applyInnerJoin(q, query)
     return filters.$select ? q.select(filters.$select.concat(idField)) : q.selectAll()
   }
 
@@ -111,7 +104,7 @@ export class KyselyAdapter<
     const options = this.getOptions(params)
     const { id: idField } = options
     const { filters, query } = this.filterQuery(params)
-    const q = this.startSelectQuery(options, filters)
+    const q = this.startSelectQuery(options, filters, query)
 
     const qWhere = this.applyWhere(q, query)
     const qSorted = this.applySort(qWhere, filters)
@@ -121,34 +114,67 @@ export class KyselyAdapter<
     return qSorted.select(countParams)
   }
 
+  applyInnerJoin<Q extends Record<string, any>>(q: Q, query: Query, alreadyJoined: string[] = []) {
+    // @ts-expect-error TODO: add it to options
+    if (!this.queryMap) return q
+
+    for (const key in query) {
+      if (key === '$and' || key === '$or') {
+        q = this.applyInnerJoin(q, query[key], alreadyJoined)
+        continue
+      }
+
+      if (!key.includes('.')) continue
+
+      const mapKey = key.split('.')[0]
+
+      // @ts-expect-error TODO: add it to options
+      const map = this.queryMap[mapKey]
+      if (!map) continue
+
+      if (alreadyJoined.includes(mapKey)) continue
+
+      const tableName = map.db || map.service
+      const keyHere = map.keyHere || 'id'
+      const keyThere = map.keyThere || 'id'
+
+      q = q.innerJoin(`${tableName} as ${mapKey}`, `${mapKey}.${keyThere}`, `${this.options.name}.${keyHere}`)
+    }
+
+    return q
+  }
+
+  getOperator(op: string, value: any) {
+    if (value !== null) {
+      return OPERATORS[op]
+    }
+
+    if (op === '$ne') return 'is not'
+    if (op === '$eq') return 'is'
+    return OPERATORS[op]
+  }
+
   applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
-    return Object.entries(query).reduce((q, [key, value]) => {
-      // if (key === '$or') {
-      //   return value.reduce((q: Q, subParams: Query) => {
-      //     return q.orWhere((subQ: Q) => this.applyWhere(subQ, subParams))
-      //   }, q)
-      // } else
-      if (['$and', '$or'].includes(key)) {
+    return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
+      if (['$and', '$or'].includes(queryKey)) {
         return q.where((qb: any) => {
-          return this.handleAndOr(qb, key, value)
+          return this.handleAndOr(qb, queryKey, queryProperty)
         })
-      } else if (_.isObject(value)) {
+      } else if (_.isObject(queryProperty)) {
         // loop through OPERATORS and apply them
-        const qOperators = Object.entries(OPERATORS).reduce((q, [operator, op]) => {
-          if (value?.hasOwnProperty(operator)) {
-            const val = value[operator]
-            if (val === null) {
-              const nullOperator = operator === '$ne' ? 'is not' : 'is'
-              return q.where(key, nullOperator, val)
-            } else return q.where(key, op, value[operator])
-          }
-          return q
-        }, q)
-        return qOperators
+        for (const operator in queryProperty) {
+          const value = queryProperty[operator]
+          const op = this.getOperator(operator, value)
+          if (!op) continue
+          q = q.where(queryKey, op, value)
+        }
+
+        return q
       } else {
-        if (value === null) return q.where(key, 'is', value)
-        else return q.where(key, '=', value)
+        const op = this.getOperator('$eq', queryProperty)
+        if (!op) return q
+        return q.where(queryKey, op, queryProperty)
       }
     }, q)
   }
@@ -171,31 +197,32 @@ export class KyselyAdapter<
           return qb.and(
             Object.entries(OPERATORS)
               .filter(([operator, op]) => {
+                // eslint-disable-next-line no-prototype-builtins
                 return value?.hasOwnProperty(operator)
               })
               .map(([operator, op]) => {
                 const val = value[operator]
-                return this.whereCompare(qb, key, op, val)
+                return this.whereCompare(qb, key, operator, val)
               }),
           )
         } else {
-          return this.whereCompare(qb, key, '=', value)
+          return this.whereCompare(qb, key, '$eq', value)
         }
       }),
     )
   }
 
   whereCompare(qb: any, key: string, operator: any, value: any) {
-    if (value === null) {
-      const nullOperator = operator === '$ne' ? 'is not' : 'is'
-      return qb.cmpr(key, nullOperator, value)
-    } else return qb.cmpr(key, operator, value)
+    return qb.eb(key, this.getOperator(operator, value), value)
   }
 
-  applySort<Q extends SelectQueryBuilder<any, string, {}>>(q: Q, filters: any) {
-    return Object.entries(filters.$sort || {}).reduce((q, [key, value]) => {
-      return q.orderBy(key, value === 1 ? 'asc' : 'desc')
-    }, q as SelectQueryBuilder<any, string, {}>)
+  applySort<Q extends SelectQueryBuilder<any, string, any>>(q: Q, filters: any) {
+    return Object.entries(filters.$sort || {}).reduce(
+      (q, [key, value]) => {
+        return q.orderBy(key, value === 1 ? 'asc' : 'desc')
+      },
+      q as SelectQueryBuilder<any, string, any>,
+    )
   }
 
   /**
@@ -203,7 +230,7 @@ export class KyselyAdapter<
    * @param q kysely query builder
    * @param data data which is expected to be returned
    */
-  applyReturning<Q extends DeleteOrInsertBuilder>(q: Q, keys: string[]) {
+  applyReturning<Q extends InsertQueryBuilder<any, any, any>>(q: Q, keys: string[]) {
     return keys.reduce((q, key) => {
       return q.returning(`${key} as ${key}`)
     }, q.returningAll())
@@ -250,6 +277,7 @@ export class KyselyAdapter<
         }
       } catch (error) {
         errorHandler(error)
+        throw error
       }
     }
 
@@ -258,6 +286,7 @@ export class KyselyAdapter<
       return data as Result[]
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
@@ -267,12 +296,12 @@ export class KyselyAdapter<
    */
   async _get(id: Id, params: ServiceParams = {} as ServiceParams): Promise<Result> {
     const options = this.getOptions(params)
-    const { name, id: idField } = options
+    const { id: idField } = options
     const { filters, query } = this.filterQuery(params)
 
     if (id != null && query[idField] != null) throw new NotFound()
 
-    const q = this.startSelectQuery(options, filters)
+    const q = this.startSelectQuery(options, filters, query)
     const qWhere = this.applyWhere(q, { [idField]: id, ...query })
     const compiled = qWhere.compile()
     try {
@@ -283,6 +312,7 @@ export class KyselyAdapter<
       return item as Result
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
@@ -304,7 +334,9 @@ export class KyselyAdapter<
     const isArray = Array.isArray(_data)
     const $select = filters.$select?.length ? filters.$select.concat(idField) : undefined
 
-    const convertedData = isArray ? _data.map((i) => this.convertValues(i)) : [this.convertValues(_data)]
+    const convertedData = isArray
+      ? _data.map((d) => this.convertValues(d as any))
+      : [this.convertValues(_data as any)]
     const q = this.Model.insertInto(name).values(convertedData)
 
     const qReturning = this.applyReturning(q, Object.keys(convertedData[0]))
@@ -313,8 +345,8 @@ export class KyselyAdapter<
 
     const request = isArray ? qReturning.execute() : qReturning.executeTakeFirst()
     try {
-      const response = await request
-      const toReturn = filters.$select?.length
+      const response = (await request)!
+      const toReturn = $select?.length
         ? isArray
           ? response.map((i: any) => _.pick(i, ...$select))
           : _.pick(response, ...$select)
@@ -323,6 +355,7 @@ export class KyselyAdapter<
       return toReturn
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
@@ -353,8 +386,8 @@ export class KyselyAdapter<
 
     const q = this.Model.updateTable(name).set(_.omit(_data, idField))
     const qWhere = this.applyWhere(q, asMulti ? query : id == null ? query : { [idField]: id, ...query })
-    const toSelect = filters.$select?.length ? filters.$select : Object.keys(_data)
-    const qReturning = this.applyReturning(qWhere, toSelect.concat(idField))
+    const toSelect = filters.$select?.length ? filters.$select : Object.keys(_data as any)
+    const qReturning = this.applyReturning(qWhere as any, toSelect.concat(idField))
 
     const compiled = qReturning.compile()
 
@@ -366,7 +399,7 @@ export class KyselyAdapter<
         throw new NotFound(`No record found for ${idField} '${id}'`)
       }
 
-      const toReturn = filters.$select?.length
+      const toReturn = $select?.length
         ? Array.isArray(response)
           ? response.map((i: any) => _.pick(i, ...$select))
           : _.pick(response, ...$select)
@@ -375,11 +408,12 @@ export class KyselyAdapter<
       return toReturn as Result | Result[]
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
   async _update(id: Id, _data: Data, params: ServiceParams = {} as ServiceParams): Promise<Result> {
-    if (id === null || Array.isArray(_data)) {
+    if (id === null) {
       throw new BadRequest("You can not replace multiple instances. Did you mean 'patch'?")
     }
 
@@ -430,6 +464,7 @@ export class KyselyAdapter<
       return originalData as Result | Result[]
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 }

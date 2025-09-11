@@ -1,15 +1,15 @@
-import { PaginationOptions } from '@feathersjs/adapter-commons'
-import { MethodNotAllowed } from '@feathersjs/errors/lib'
-import { Paginated, ServiceMethods, Id, NullableId, Params } from '@feathersjs/feathers'
-import { KyselyAdapter } from './adapter'
-import { KyselyAdapterParams } from './declarations'
+import type { PaginationOptions } from '@feathersjs/adapter-commons'
+import { MethodNotAllowed } from '@feathersjs/errors'
+import type { Paginated, ServiceMethods, Id, NullableId, Params } from '@feathersjs/feathers'
+import { KyselyAdapter } from './adapter.js'
+import type { KyselyAdapterParams } from './declarations.js'
 
-export * from './declarations'
-export * from './adapter'
-export * from './error-handler'
+export * from './declarations.js'
+export * from './adapter.js'
+export * from './error-handler.js'
 
 export class KyselyService<
-    Result = any,
+    Result extends Record<string, any> = Record<string, any>,
     Data = Partial<Result>,
     ServiceParams extends Params<any> = KyselyAdapterParams,
     PatchData = Partial<Data>,
@@ -24,14 +24,14 @@ export class KyselyService<
     return this._find({
       ...params,
       query: await this.sanitizeQuery(params),
-    })
+    } as any)
   }
 
   async get(id: Id, params?: ServiceParams): Promise<Result> {
     return this._get(id, {
       ...params,
       query: await this.sanitizeQuery(params),
-    })
+    } as any)
   }
 
   async create(data: Data, params?: ServiceParams): Promise<Result>
@@ -49,7 +49,7 @@ export class KyselyService<
     return this._update(id, data, {
       ...params,
       query: await this.sanitizeQuery(params),
-    })
+    } as any)
   }
 
   async patch(id: Id, data: PatchData, params?: ServiceParams): Promise<Result>
@@ -61,7 +61,7 @@ export class KyselyService<
     return this._patch(id, data, {
       ...params,
       query,
-    })
+    } as any)
   }
 
   async remove(id: Id, params?: ServiceParams): Promise<Result>
@@ -73,6 +73,6 @@ export class KyselyService<
     return this._remove(id, {
       ...params,
       query,
-    })
+    } as any)
   }
 }

@@ -1,26 +1,19 @@
 {
-  "name": "feathers-kysely",
+  "name": "@fratzinger/feathers-kysely",
   "description": "Feathers SQL service adapter using Kysely",
-  "version": "0.0.3",
-  "homepage": "https://github.com/marshallswain/feathers-kysely",
-  "main": "lib/",
+  "version": "0.0.0",
+  "homepage": "https://github.com/fratzinger/feathers-kysely",
   "keywords": [
     "feathers",
     "feathers-plugin"
   ],
   "license": "MIT",
-  "funding": {
-    "type": "github",
-    "url": "https://github.com/sponsors/marshallswain"
-  },
   "repository": {
     "type": "git",
-    "url": "git://github.com/marshallswain/feathers-kysely.git"
+    "url": "git://github.com/fratzinger/feathers-kysely.git"
   },
   "author": {
-    "name": "Marshall Thompson",
-    "email": "marshall@creativeideal.net",
-    "url": "https://github.com/marshallswain"
+    "name": "Frederik Schmatz"
   },
   "contributors": [],
   "bugs": {
@@ -34,46 +27,50 @@
     "LICENSE",
     "README.md",
     "src/**",
-    "lib/**",
+    "dist/**",
     "*.d.ts",
     "*.js"
   ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "prepublish": "npm run compile",
-    "compile": "shx rm -rf lib/ && tsc",
-    "test": "mocha --config .mocharc.json --recursive test/**.test.ts test/**/*.test.ts",
-    "build": "npm run compile",
-    "release:pre": "npm run build && npm version prerelease && npm publish --tag pre",
-    "release:patch": "npm run build && npm version patch && npm publish",
-    "release:minor": "npm run build && npm version minor && npm publish",
-    "release:major": "npm run build && npm version major && npm publish"
-  },
-  "directories": {
-    "lib": "lib"
-  },
-  "publishConfig": {
-    "access": "public"
+    "build": "tsup-node",
+    "test": "vitest run",
+    "lint": "eslint",
+    "vitest": "vitest"
   },
   "dependencies": {
-    "@feathersjs/adapter-commons": "^5.0.4",
-    "@feathersjs/commons": "^5.0.4",
-    "@feathersjs/errors": "^5.0.4",
-    "@feathersjs/feathers": "^5.0.4"
+    "@feathersjs/adapter-commons": "^5.0.35",
+    "@feathersjs/commons": "^5.0.35",
+    "@feathersjs/errors": "^5.0.35",
+    "@feathersjs/feathers": "^5.0.35",
+    "better-sqlite3": "^12.2.0"
   },
   "devDependencies": {
-    "@feathersjs/adapter-tests": "^5.0.4",
-    "@feathersjs/schema": "^5.0.4",
-    "@types/better-sqlite3": "^7.6.4",
-    "@types/mocha": "^10.0.1",
-    "@types/node": "^18.15.11",
-    "better-sqlite3": "^8.4.0",
-    "kysely": "^0.24.2",
-    "mocha": "^10.2.0",
-    "nyc": "^15.1.0",
-    "pg": "^8.10.0",
-    "shx": "^0.3.4",
-    "source-map-support": "^0.5.21",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.0.3"
-  }
+    "@feathers-community/eslint-config": "^0.0.8",
+    "@tsconfig/node22": "^22.0.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.3.1",
+    "@types/pg": "^8.15.5",
+    "eslint": "^9.35.0",
+    "feathers-adapter-vitest": "^0.0.3",
+    "kysely": "^0.28.5",
+    "mysql2": "^3.14.5",
+    "nyc": "^17.1.0",
+    "pg": "^8.16.3",
+    "shx": "^0.4.0",
+    "sqlite3": "^5.1.7",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@9.15.9"
 }

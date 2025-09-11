@@ -1,5 +1,5 @@
-import assert from 'assert'
-import { errorHandler } from '../src'
+import assert from 'node:assert'
+import { errorHandler } from '../src/index.js'
 
 describe('Kysely Error handler', () => {
   it('sqlState', () => {
