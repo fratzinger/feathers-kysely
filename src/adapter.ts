@@ -103,7 +103,10 @@ export class KyselyAdapter<
   getOptions(
     params: ServiceParams,
   ): KyselyAdapterOptions & { id: string; dialectType: DialectType } {
-    return super.getOptions(params) as KyselyAdapterOptions & { id: string }
+    return super.getOptions(params) as KyselyAdapterOptions & {
+      id: string
+      dialectType: DialectType
+    }
   }
 
   getModel(params: ServiceParams = {} as ServiceParams) {
@@ -155,11 +158,11 @@ export class KyselyAdapter<
     const { query } = this.filterQuery(params)
 
     const { name, id: idField } = options
-    let q = this.Model.selectFrom(name)
-    q = this.applyInnerJoin(q, query)
-    q = q.select(this.Model.fn.count(idField).as('total'))
+    const q = this.Model.selectFrom(name)
+    const joined = this.applyInnerJoin(q, query)
+    const selected = joined.select(this.Model.fn.count(idField).as('total'))
 
-    const qWhere = this.applyWhere(q, query)
+    const qWhere = this.applyWhere(selected, query)
 
     return qWhere
   }
