@@ -12,26 +12,6 @@ env:
   MYSQL_PASSWORD: password
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20.x, 22.x]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
-    steps:
-      - uses: actions/checkout@v4
-
-      - run: npm install -g corepack@latest
-      - run: corepack enable
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
-      - run: pnpm i
-      - run: pnpm run lint
-      - run: pnpm run test
-
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'pnpm'
+          cache: "pnpm"
       - run: pnpm i
       - run: pnpm lint
 
@@ -62,7 +42,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
+          cache: "pnpm"
       - run: pnpm i
       - run: pnpm test
 
@@ -96,7 +76,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
+          cache: "pnpm"
       - run: pnpm i
       - run: pnpm test
 
@@ -130,7 +110,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
+          cache: "pnpm"
       - run: pnpm i
       - run: pnpm test
 
@@ -143,7 +123,7 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts
-          cache: 'pnpm'
+          node-version: "lts/*"
+          cache: "pnpm"
       - run: pnpm i
       - run: pnpm build

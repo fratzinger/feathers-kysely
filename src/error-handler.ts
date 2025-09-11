@@ -61,7 +61,11 @@ export function errorHandler(error: any) {
         feathersError = new errors.GeneralError(message)
         break
     }
-  } else if (typeof error.code === 'string' && error.severity && error.routine) {
+  } else if (
+    typeof error.code === 'string' &&
+    error.severity &&
+    error.routine
+  ) {
     // NOTE: Error codes taken from
     // https://www.postgresql.org/docs/9.6/static/errcodes-appendix.html
     // Omit query information

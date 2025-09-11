@@ -116,7 +116,9 @@ describe('relations', () => {
       { text: "Bob's first todo", userId: users[1].id },
     ])
 
-    const aliceTodos = await app.service('todos').find({ query: { 'user.name': 'Alice' }, paginate: false })
+    const aliceTodos = await app
+      .service('todos')
+      .find({ query: { 'user.name': 'Alice' }, paginate: false })
     assert.strictEqual(aliceTodos.length, 2)
     assert.ok(aliceTodos.every((todo) => todo.userId === users[0].id))
   })

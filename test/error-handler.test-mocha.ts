@@ -25,10 +25,18 @@ describe('Kysely Error handler', () => {
         name: 'BadRequest',
       },
     )
-    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 2 }), { name: 'Unavailable' })
-    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 3 }), { name: 'Forbidden' })
-    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 12 }), { name: 'NotFound' })
-    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 13 }), { name: 'GeneralError' })
+    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 2 }), {
+      name: 'Unavailable',
+    })
+    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 3 }), {
+      name: 'Forbidden',
+    })
+    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 12 }), {
+      name: 'NotFound',
+    })
+    assert.throws(() => errorHandler({ code: 'SQLITE_ERROR', errno: 13 }), {
+      name: 'GeneralError',
+    })
   })
 
   it('postgresqlError', () => {
@@ -46,20 +54,38 @@ describe('Kysely Error handler', () => {
     )
     assert.throws(
       () =>
-        errorHandler({ code: '2874', message: 'Something', severity: 'ERROR', routine: 'ExecConstraints' }),
+        errorHandler({
+          code: '2874',
+          message: 'Something',
+          severity: 'ERROR',
+          routine: 'ExecConstraints',
+        }),
       {
         name: 'Forbidden',
       },
     )
     assert.throws(
       () =>
-        errorHandler({ code: '3D74', message: 'Something', severity: 'ERROR', routine: 'ExecConstraints' }),
+        errorHandler({
+          code: '3D74',
+          message: 'Something',
+          severity: 'ERROR',
+          routine: 'ExecConstraints',
+        }),
       {
         name: 'Unprocessable',
       },
     )
-    assert.throws(() => errorHandler({ code: 'XYZ', severity: 'ERROR', routine: 'ExecConstraints' }), {
-      name: 'GeneralError',
-    })
+    assert.throws(
+      () =>
+        errorHandler({
+          code: 'XYZ',
+          severity: 'ERROR',
+          routine: 'ExecConstraints',
+        }),
+      {
+        name: 'GeneralError',
+      },
+    )
   })
 })

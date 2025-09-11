@@ -1,6 +1,12 @@
 import type { PaginationOptions } from '@feathersjs/adapter-commons'
 import { MethodNotAllowed } from '@feathersjs/errors'
-import type { Paginated, ServiceMethods, Id, NullableId, Params } from '@feathersjs/feathers'
+import type {
+  Paginated,
+  ServiceMethods,
+  Id,
+  NullableId,
+  Params,
+} from '@feathersjs/feathers'
 import { KyselyAdapter } from './adapter.js'
 import type { KyselyAdapterParams } from './declarations.js'
 
@@ -15,9 +21,12 @@ export class KyselyService<
     PatchData = Partial<Data>,
   >
   extends KyselyAdapter<Result, Data, ServiceParams, PatchData>
-  implements ServiceMethods<Result | Paginated<Result>, Data, ServiceParams, PatchData>
+  implements
+    ServiceMethods<Result | Paginated<Result>, Data, ServiceParams, PatchData>
 {
-  async find(params?: ServiceParams & { paginate?: PaginationOptions }): Promise<Paginated<Result>>
+  async find(
+    params?: ServiceParams & { paginate?: PaginationOptions },
+  ): Promise<Paginated<Result>>
   async find(params?: ServiceParams & { paginate: false }): Promise<Result[]>
   async find(params?: ServiceParams): Promise<Paginated<Result> | Result[]>
   async find(params?: ServiceParams): Promise<Paginated<Result> | Result[]> {
@@ -36,8 +45,14 @@ export class KyselyService<
 
   async create(data: Data, params?: ServiceParams): Promise<Result>
   async create(data: Data[], params?: ServiceParams): Promise<Result[]>
-  async create(data: Data | Data[], params?: ServiceParams): Promise<Result | Result[]>
-  async create(data: Data | Data[], params?: ServiceParams): Promise<Result | Result[]> {
+  async create(
+    data: Data | Data[],
+    params?: ServiceParams,
+  ): Promise<Result | Result[]>
+  async create(
+    data: Data | Data[],
+    params?: ServiceParams,
+  ): Promise<Result | Result[]> {
     if (Array.isArray(data) && !this.allowsMulti('create', params)) {
       throw new MethodNotAllowed('Can not create multiple entries')
     }
@@ -53,9 +68,21 @@ export class KyselyService<
   }
 
   async patch(id: Id, data: PatchData, params?: ServiceParams): Promise<Result>
-  async patch(id: null, data: PatchData, params?: ServiceParams): Promise<Result[]>
-  async patch(id: NullableId, data: PatchData, params?: ServiceParams): Promise<Result | Result[]>
-  async patch(id: NullableId, data: PatchData, params?: ServiceParams): Promise<Result | Result[]> {
+  async patch(
+    id: null,
+    data: PatchData,
+    params?: ServiceParams,
+  ): Promise<Result[]>
+  async patch(
+    id: NullableId,
+    data: PatchData,
+    params?: ServiceParams,
+  ): Promise<Result | Result[]>
+  async patch(
+    id: NullableId,
+    data: PatchData,
+    params?: ServiceParams,
+  ): Promise<Result | Result[]> {
     const { $limit, ...query } = await this.sanitizeQuery(params)
 
     return this._patch(id, data, {
@@ -66,8 +93,14 @@ export class KyselyService<
 
   async remove(id: Id, params?: ServiceParams): Promise<Result>
   async remove(id: null, params?: ServiceParams): Promise<Result[]>
-  async remove(id: NullableId, params?: ServiceParams): Promise<Result | Result[]>
-  async remove(id: NullableId, params?: ServiceParams): Promise<Result | Result[]> {
+  async remove(
+    id: NullableId,
+    params?: ServiceParams,
+  ): Promise<Result | Result[]>
+  async remove(
+    id: NullableId,
+    params?: ServiceParams,
+  ): Promise<Result | Result[]> {
     const { $limit, ...query } = await this.sanitizeQuery(params)
 
     return this._remove(id, {

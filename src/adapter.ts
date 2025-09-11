@@ -1,12 +1,22 @@
 import type { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
 import { _ } from '@feathersjs/commons'
-import type { PaginationOptions, AdapterQuery } from '@feathersjs/adapter-commons'
+import type {
+  PaginationOptions,
+  AdapterQuery,
+} from '@feathersjs/adapter-commons'
 import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
 import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
-import type { KyselyAdapterOptions, KyselyAdapterParams } from './declarations.js'
-import type { ComparisonOperatorExpression, InsertQueryBuilder, SelectQueryBuilder } from 'kysely'
+import type {
+  KyselyAdapterOptions,
+  KyselyAdapterParams,
+} from './declarations.js'
+import type {
+  ComparisonOperatorExpression,
+  InsertQueryBuilder,
+  SelectQueryBuilder,
+} from 'kysely'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -30,12 +40,20 @@ export class KyselyAdapter<
   Data = Partial<Result>,
   ServiceParams extends KyselyAdapterParams<any> = KyselyAdapterParams,
   PatchData = Partial<Data>,
-> extends AdapterBase<Result, Data, PatchData, ServiceParams, KyselyAdapterOptions> {
+> extends AdapterBase<
+  Result,
+  Data,
+  PatchData,
+  ServiceParams,
+  KyselyAdapterOptions
+> {
   schema?: string
 
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
-      throw new Error('You must provide a Kysely instance to the `Model` option')
+      throw new Error(
+        'You must provide a Kysely instance to the `Model` option',
+      )
     }
 
     if (typeof options.name !== 'string') {
@@ -73,8 +91,16 @@ export class KyselyAdapter<
 
   filterQuery(params: ServiceParams) {
     const options = this.getOptions(params)
-    const { $select, $sort, $limit: _limit, $skip = 0, ...query } = (params.query || {}) as AdapterQuery
-    const $limit = $skip ? getLimit(_limit, options.paginate) || -1 : getLimit(_limit, options.paginate)
+    const {
+      $select,
+      $sort,
+      $limit: _limit,
+      $skip = 0,
+      ...query
+    } = (params.query || {}) as AdapterQuery
+    const $limit = $skip
+      ? getLimit(_limit, options.paginate) || -1
+      : getLimit(_limit, options.paginate)
 
     return {
       paginate: options.paginate,
@@ -97,7 +123,9 @@ export class KyselyAdapter<
     const { name, id: idField } = options
     let q = this.Model.selectFrom(name)
     q = this.applyInnerJoin(q, query)
-    return filters.$select ? q.select(filters.$select.concat(idField)) : q.selectAll()
+    return filters.$select
+      ? q.select(filters.$select.concat(idField))
+      : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
@@ -114,7 +142,11 @@ export class KyselyAdapter<
     return qSorted.select(countParams)
   }
 
-  applyInnerJoin<Q extends Record<string, any>>(q: Q, query: Query, alreadyJoined: string[] = []) {
+  applyInnerJoin<Q extends Record<string, any>>(
+    q: Q,
+    query: Query,
+    alreadyJoined: string[] = [],
+  ) {
     // @ts-expect-error TODO: add it to options
     if (!this.queryMap) return q
 
@@ -138,7 +170,11 @@ export class KyselyAdapter<
       const keyHere = map.keyHere || 'id'
       const keyThere = map.keyThere || 'id'
 
-      q = q.innerJoin(`${tableName} as ${mapKey}`, `${mapKey}.${keyThere}`, `${this.options.name}.${keyHere}`)
+      q = q.innerJoin(
+        `${tableName} as ${mapKey}`,
+        `${mapKey}.${keyThere}`,
+        `${this.options.name}.${keyHere}`,
+      )
     }
 
     return q
@@ -216,7 +252,10 @@ export class KyselyAdapter<
     return qb.eb(key, this.getOperator(operator, value), value)
   }
 
-  applySort<Q extends SelectQueryBuilder<any, string, any>>(q: Q, filters: any) {
+  applySort<Q extends SelectQueryBuilder<any, string, any>>(
+    q: Q,
+    filters: any,
+  ) {
     return Object.entries(filters.$sort || {}).reduce(
       (q, [key, value]) => {
         return q.orderBy(key, value === 1 ? 'asc' : 'desc')
@@ -230,7 +269,10 @@ export class KyselyAdapter<
    * @param q kysely query builder
    * @param data data which is expected to be returned
    */
-  applyReturning<Q extends InsertQueryBuilder<any, any, any>>(q: Q, keys: string[]) {
+  applyReturning<Q extends InsertQueryBuilder<any, any, any>>(
+    q: Q,
+    keys: string[],
+  ) {
     return keys.reduce((q, key) => {
       return q.returning(`${key} as ${key}`)
     }, q.returningAll())
@@ -253,10 +295,14 @@ export class KyselyAdapter<
    * See https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html
    * @param params
    */
-  async _find(params?: ServiceParams & { paginate?: PaginationOptions }): Promise<Paginated<Result>>
+  async _find(
+    params?: ServiceParams & { paginate?: PaginationOptions },
+  ): Promise<Paginated<Result>>
   async _find(params?: ServiceParams & { paginate: false }): Promise<Result[]>
   async _find(params?: ServiceParams): Promise<Paginated<Result> | Result[]>
-  async _find(params: ServiceParams = {} as ServiceParams): Promise<Paginated<Result> | Result[]> {
+  async _find(
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Paginated<Result> | Result[]> {
     const { filters, query, paginate } = this.filterQuery(params)
     const options = this.getOptions(params)
     const q = this.createQuery(options, filters, query)
@@ -264,7 +310,10 @@ export class KyselyAdapter<
     if (paginate && paginate.default) {
       const countQuery = this.createCountQuery(params)
       try {
-        const [queryResult, countQueryResult] = await Promise.all([q.execute(), countQuery.execute()])
+        const [queryResult, countQueryResult] = await Promise.all([
+          q.execute(),
+          countQuery.execute(),
+        ])
 
         const data = filters.$limit === 0 ? [] : queryResult
         const total = (countQueryResult[0] as any).total
@@ -294,7 +343,10 @@ export class KyselyAdapter<
    * Retrieve a single record by id
    * See https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html
    */
-  async _get(id: Id, params: ServiceParams = {} as ServiceParams): Promise<Result> {
+  async _get(
+    id: Id,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result> {
     const options = this.getOptions(params)
     const { id: idField } = options
     const { filters, query } = this.filterQuery(params)
@@ -324,7 +376,10 @@ export class KyselyAdapter<
    */
   async _create(data: Data, params?: ServiceParams): Promise<Result>
   async _create(data: Data[], params?: ServiceParams): Promise<Result[]>
-  async _create(data: Data | Data[], _params?: ServiceParams): Promise<Result | Result[]>
+  async _create(
+    data: Data | Data[],
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
   async _create(
     _data: Data | Data[],
     params: ServiceParams = {} as ServiceParams,
@@ -332,7 +387,9 @@ export class KyselyAdapter<
     const { name, id: idField } = this.getOptions(params)
     const { filters } = this.filterQuery(params)
     const isArray = Array.isArray(_data)
-    const $select = filters.$select?.length ? filters.$select.concat(idField) : undefined
+    const $select = filters.$select?.length
+      ? filters.$select.concat(idField)
+      : undefined
 
     const convertedData = isArray
       ? _data.map((d) => this.convertValues(d as any))
@@ -343,7 +400,9 @@ export class KyselyAdapter<
 
     const compiled = qReturning.compile()
 
-    const request = isArray ? qReturning.execute() : qReturning.executeTakeFirst()
+    const request = isArray
+      ? qReturning.execute()
+      : qReturning.executeTakeFirst()
     try {
       const response = (await request)!
       const toReturn = $select?.length
@@ -366,9 +425,17 @@ export class KyselyAdapter<
    * @param data
    * @param params
    */
-  async _patch(id: null, data: PatchData, params?: ServiceParams): Promise<Result[]>
+  async _patch(
+    id: null,
+    data: PatchData,
+    params?: ServiceParams,
+  ): Promise<Result[]>
   async _patch(id: Id, data: PatchData, params?: ServiceParams): Promise<Result>
-  async _patch(id: NullableId, data: PatchData, _params?: ServiceParams): Promise<Result | Result[]>
+  async _patch(
+    id: NullableId,
+    data: PatchData,
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
   async _patch(
     id: NullableId,
     _data: PatchData,
@@ -380,18 +447,30 @@ export class KyselyAdapter<
     const asMulti = id === null
     const { name, id: idField } = this.getOptions(params)
     const { filters, query } = this.filterQuery(params)
-    const $select = filters.$select?.length ? filters.$select.concat(idField) : undefined
+    const $select = filters.$select?.length
+      ? filters.$select.concat(idField)
+      : undefined
 
     if (id != null && query[idField] != null) throw new NotFound()
 
     const q = this.Model.updateTable(name).set(_.omit(_data, idField))
-    const qWhere = this.applyWhere(q, asMulti ? query : id == null ? query : { [idField]: id, ...query })
-    const toSelect = filters.$select?.length ? filters.$select : Object.keys(_data as any)
-    const qReturning = this.applyReturning(qWhere as any, toSelect.concat(idField))
+    const qWhere = this.applyWhere(
+      q,
+      asMulti ? query : id == null ? query : { [idField]: id, ...query },
+    )
+    const toSelect = filters.$select?.length
+      ? filters.$select
+      : Object.keys(_data as any)
+    const qReturning = this.applyReturning(
+      qWhere as any,
+      toSelect.concat(idField),
+    )
 
     const compiled = qReturning.compile()
 
-    const request = asMulti ? qReturning.execute() : qReturning.executeTakeFirst()
+    const request = asMulti
+      ? qReturning.execute()
+      : qReturning.executeTakeFirst()
     try {
       const response = await request
 
@@ -412,9 +491,15 @@ export class KyselyAdapter<
     }
   }
 
-  async _update(id: Id, _data: Data, params: ServiceParams = {} as ServiceParams): Promise<Result> {
+  async _update(
+    id: Id,
+    _data: Data,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result> {
     if (id === null) {
-      throw new BadRequest("You can not replace multiple instances. Did you mean 'patch'?")
+      throw new BadRequest(
+        "You can not replace multiple instances. Did you mean 'patch'?",
+      )
     }
 
     const data = _.omit(_data, this.id)
@@ -440,19 +525,28 @@ export class KyselyAdapter<
    */
   async _remove(id: null, params?: ServiceParams): Promise<Result[]>
   async _remove(id: Id, params?: ServiceParams): Promise<Result>
-  async _remove(id: NullableId, _params?: ServiceParams): Promise<Result | Result[]>
-  async _remove(id: NullableId, params: ServiceParams = {} as ServiceParams): Promise<Result | Result[]> {
+  async _remove(
+    id: NullableId,
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
+  async _remove(
+    id: NullableId,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result | Result[]> {
     if (id === null && !this.allowsMulti('remove', params)) {
       throw new MethodNotAllowed('Cannot remove multiple entries')
     }
 
     params.paginate = false
 
-    const originalData = id === null ? await this._find(params) : await this._get(id, params)
+    const originalData =
+      id === null ? await this._find(params) : await this._get(id, params)
     const { name, id: idField } = this.getOptions(params)
 
     const q = this.Model.deleteFrom(name)
-    const convertedQuery = this.convertValues(id === null ? params.query : { [idField]: id })
+    const convertedQuery = this.convertValues(
+      id === null ? params.query : { [idField]: id },
+    )
     const qWhere = this.applyWhere(q as any, convertedQuery)
     const compiled = qWhere.compile()
     const request = id === null ? qWhere.execute() : qWhere.executeTakeFirst()
