@@ -63,7 +63,7 @@ export class KyselyAdapter<
   }
 
   getOptions(params: ServiceParams): KyselyAdapterOptions & { id: string } {
-    return this.getOptions(params) as KyselyAdapterOptions & { id: string }
+    return super.getOptions(params) as KyselyAdapterOptions & { id: string }
   }
 
   getModel(params: ServiceParams = {} as ServiceParams) {
