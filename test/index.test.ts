@@ -199,7 +199,6 @@ function setup() {
 
   const people = new KyselyService<Person>({
     Model: db,
-    dialectType: 'sqlite',
     name: 'people',
     events: ['testing'],
   })
@@ -207,20 +206,17 @@ function setup() {
   const peopleId = new KyselyService<Person>({
     Model: db,
     id: 'customid',
-    dialectType: 'sqlite',
     name: 'people-customid',
     events: ['testing'],
   })
 
   const users = new KyselyService<Person>({
     Model: db,
-    dialectType: 'sqlite',
     name: 'users',
     events: ['testing'],
   })
 
   const todos = new TodoService({
-    dialectType: 'sqlite',
     Model: db,
     name: 'todos',
   })

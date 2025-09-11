@@ -63,14 +63,12 @@ function setup() {
 
   const users = new KyselyService<User>({
     Model: db,
-    dialectType: 'sqlite',
     name: 'users',
     multi: true,
   })
 
   const todos = new KyselyService<Todo>({
     Model: db,
-    dialectType: 'sqlite',
     name: 'todos',
     multi: true,
   })
