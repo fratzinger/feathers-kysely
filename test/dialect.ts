@@ -8,6 +8,7 @@ export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
   DB ??= (process.env.DB as any) || 'sqlite'
 
   if (DB === 'postgres') {
+    console.log('Using Postgres')
     return new PostgresDialect({
       pool: new Pool({
         host: 'localhost',
@@ -19,6 +20,7 @@ export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
       }),
     })
   } else if (DB === 'mysql') {
+    console.log('Using MySQL')
     return new MysqlDialect({
       pool: createPool({
         database: process.env.MYSQL_DATABASE ?? 'test',
@@ -31,6 +33,7 @@ export default (DB: 'postgres' | 'mysql' | 'sqlite' = 'sqlite'): Dialect => {
     })
   }
 
+  console.log('Using SQLite')
   return new SqliteDialect({
     database: new Database(':memory:'),
   })
