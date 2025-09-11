@@ -1,4 +1,12 @@
-import { errors } from '@feathersjs/errors'
+import {
+  BadRequest,
+  FeathersError,
+  Forbidden,
+  GeneralError,
+  NotFound,
+  Unavailable,
+  Unprocessable,
+} from '@feathersjs/errors'
 
 export const ERROR = Symbol.for('feathers-kysely/error')
 
@@ -12,15 +20,15 @@ export function errorHandler(error: any) {
 
     switch (sqlState.slice(0, 2)) {
       case '02':
-        feathersError = new errors.NotFound(message)
+        feathersError = new NotFound(message)
         break
       case '28':
-        feathersError = new errors.Forbidden(message)
+        feathersError = new Forbidden(message)
         break
       case '08':
       case '0A':
       case '0K':
-        feathersError = new errors.Unavailable(message)
+        feathersError = new Unavailable(message)
         break
       case '20':
       case '21':
@@ -31,10 +39,10 @@ export function errorHandler(error: any) {
       case '40':
       case '42':
       case '70':
-        feathersError = new errors.BadRequest(message)
+        feathersError = new BadRequest(message)
         break
       default:
-        feathersError = new errors.GeneralError(message)
+        feathersError = new GeneralError(message)
     }
   } else if (error.code === 'SQLITE_ERROR') {
     // NOTE (EK): Error codes taken from
@@ -45,20 +53,20 @@ export function errorHandler(error: any) {
       case 18:
       case 19:
       case 20:
-        feathersError = new errors.BadRequest(message)
+        feathersError = new BadRequest(message)
         break
       case 2:
-        feathersError = new errors.Unavailable(message)
+        feathersError = new Unavailable(message)
         break
       case 3:
       case 23:
-        feathersError = new errors.Forbidden(message)
+        feathersError = new Forbidden(message)
         break
       case 12:
-        feathersError = new errors.NotFound(message)
+        feathersError = new NotFound(message)
         break
       default:
-        feathersError = new errors.GeneralError(message)
+        feathersError = new GeneralError(message)
         break
     }
   } else if (
@@ -75,25 +83,25 @@ export function errorHandler(error: any) {
 
     switch (error.code.slice(0, 2)) {
       case '22':
-        feathersError = new errors.NotFound(message)
+        feathersError = new NotFound(message)
         break
       case '23':
-        feathersError = new errors.BadRequest(message)
+        feathersError = new BadRequest(message)
         break
       case '28':
-        feathersError = new errors.Forbidden(message)
+        feathersError = new Forbidden(message)
         break
       case '3D':
       case '3F':
       case '42':
-        feathersError = new errors.Unprocessable(message)
+        feathersError = new Unprocessable(message)
         break
       default:
-        feathersError = new errors.GeneralError(message)
+        feathersError = new GeneralError(message)
         break
     }
-  } else if (!(error instanceof errors.FeathersError)) {
-    feathersError = new errors.GeneralError(message)
+  } else if (!(error instanceof FeathersError)) {
+    feathersError = new GeneralError(message)
   }
 
   feathersError[ERROR] = error

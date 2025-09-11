@@ -5,104 +5,116 @@ import { feathers } from '@feathersjs/feathers'
 import dialect from './dialect.js'
 
 import { KyselyService } from '../src/index.js'
-import { describe, it, beforeEach } from 'vitest'
+import { describe, it } from 'vitest'
+import { addPrimaryKey } from './test-utils.js'
 
-interface TodosTable {
-  id: Generated<number>
-  text: string
-  userId: number
+function setup() {
+  interface TodosTable {
+    id: Generated<number>
+    text: string
+    userId: number
+  }
+
+  interface UsersTable {
+    id: Generated<number>
+    name: string
+    age: number | null
+    time?: number | null
+    created: boolean | null
+  }
+
+  interface DB {
+    todos: TodosTable
+    users: UsersTable
+  }
+
+  const db = new Kysely<DB>({
+    dialect: dialect(),
+    //   log(event) {
+    //     console.log(event.query.sql)
+    //   }
+  })
+
+  const clean = async () => {
+    // drop and recreate the todos table
+    await db.schema.dropTable('todos').ifExists().execute()
+
+    await addPrimaryKey(
+      db.schema
+        .createTable('todos')
+        .addColumn('text', 'text', (col) => col.notNull())
+        .addColumn('userId', 'integer', (col) => col.notNull()),
+      'id',
+    ).execute()
+
+    // drop and recreate the users table
+    await db.schema.dropTable('users').ifExists().execute()
+
+    await addPrimaryKey(
+      db.schema
+        .createTable('users')
+        .addColumn('name', 'text', (col) => col.notNull())
+        .addColumn('age', 'real')
+        .addColumn('time', 'real')
+        .addColumn('created', 'boolean'),
+      'id',
+    ).execute()
+  }
+
+  const users = new KyselyService<User>({
+    Model: db,
+    dialectType: 'sqlite',
+    name: 'users',
+    multi: true,
+  })
+
+  const todos = new KyselyService<Todo>({
+    Model: db,
+    dialectType: 'sqlite',
+    name: 'todos',
+    multi: true,
+  })
+
+  // @ts-expect-error TODO: add to options
+  todos.queryMap = {
+    user: {
+      service: 'users',
+      keyHere: 'userId',
+      keyThere: 'id',
+      asArray: false,
+      db: 'users',
+    },
+  }
+
+  type User = {
+    id: number
+    name: string
+    age: number | null
+    time: string
+    create: boolean
+  }
+
+  type Todo = {
+    id: number
+    text: string
+    userId: number
+  }
+
+  type ServiceTypes = {
+    users: KyselyService<User>
+    todos: KyselyService<Todo>
+  }
+
+  const app = feathers<ServiceTypes>().use('users', users).use('todos', todos)
+  return { app, db, clean }
 }
 
-interface UsersTable {
-  id: Generated<number>
-  name: string
-  age: number | null
-  time?: number | null
-  created: boolean | null
-}
-
-interface DB {
-  todos: TodosTable
-  users: UsersTable
-}
-
-const db = new Kysely<DB>({
-  dialect: dialect(),
-  //   log(event) {
-  //     console.log(event.query.sql)
-  //   }
-})
-
-const clean = async () => {
-  // drop and recreate the todos table
-  await db.schema.dropTable('todos').ifExists().execute()
-  await db.schema
-    .createTable('todos')
-    .addColumn('id', 'integer', (col) => col.primaryKey().autoIncrement())
-    .addColumn('text', 'text', (col) => col.notNull())
-    .addColumn('userId', 'integer', (col) => col.notNull())
-    .execute()
-
-  // drop and recreate the users table
-  await db.schema.dropTable('users').ifExists().execute()
-  await db.schema
-    .createTable('users')
-    .addColumn('id', 'integer', (col) => col.primaryKey().autoIncrement())
-    .addColumn('name', 'text', (col) => col.notNull())
-    .addColumn('age', 'real')
-    .addColumn('time', 'real')
-    .addColumn('created', 'boolean')
-    .execute()
-}
-
-const users = new KyselyService<User>({
-  Model: db,
-  dialectType: 'sqlite',
-  name: 'users',
-  multi: true,
-})
-
-const todos = new KyselyService<Todo>({
-  Model: db,
-  dialectType: 'sqlite',
-  name: 'todos',
-  multi: true,
-})
-
-// @ts-expect-error TODO: add to options
-todos.queryMap = {
-  user: {
-    service: 'users',
-    keyHere: 'userId',
-    keyThere: 'id',
-    asArray: false,
-    db: 'users',
-  },
-}
-
-type User = {
-  id: number
-  name: string
-  age: number | null
-  time: string
-  create: boolean
-}
-
-type Todo = {
-  id: number
-  text: string
-  userId: number
-}
-
-type ServiceTypes = {
-  users: KyselyService<User>
-  todos: KyselyService<Todo>
-}
-
-const app = feathers<ServiceTypes>().use('users', users).use('todos', todos)
+const { app, db, clean } = setup()
 
 describe('relations', () => {
-  beforeEach(clean)
+  beforeAll(clean)
+
+  afterAll(() => db.destroy())
 
   it('query for relation', async () => {
     const users = await app.service('users').create([

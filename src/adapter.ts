@@ -98,9 +98,7 @@ export class KyselyAdapter<
       $skip = 0,
       ...query
     } = (params.query || {}) as AdapterQuery
-    const $limit = $skip
-      ? getLimit(_limit, options.paginate) || -1
-      : getLimit(_limit, options.paginate)
+    const $limit = getLimit(_limit, options.paginate)
 
     return {
       paginate: options.paginate,
@@ -112,10 +110,10 @@ export class KyselyAdapter<
   createQuery(options: KyselyAdapterOptions, filters: any, query: any) {
     const q = this.startSelectQuery(options, filters, query)
     const qWhere = this.applyWhere(q, query)
+    console.log(filters.$limit)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
     const qSorted = this.applySort(qSkip, filters)
-    const compiled = qSorted.compile()
     return qSorted
   }
 
@@ -124,22 +122,22 @@ export class KyselyAdapter<
     let q = this.Model.selectFrom(name)
     q = this.applyInnerJoin(q, query)
     return filters.$select
-      ? q.select(filters.$select.concat(idField))
+      ? q.select([...new Set([...filters.$select, idField])])
       : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
     const options = this.getOptions(params)
-    const { id: idField } = options
-    const { filters, query } = this.filterQuery(params)
-    const q = this.startSelectQuery(options, filters, query)
+    const { query } = this.filterQuery(params)
+
+    const { name, id: idField } = options
+    let q = this.Model.selectFrom(name)
+    q = this.applyInnerJoin(q, query)
+    q = q.select(this.Model.fn.count(idField).as('total'))
 
     const qWhere = this.applyWhere(q, query)
-    const qSorted = this.applySort(qWhere, filters)
 
-    // count
-    const countParams = this.Model.fn.count(idField).as('total')
-    return qSorted.select(countParams)
+    return qWhere
   }
 
   applyInnerJoin<Q extends Record<string, any>>(
@@ -311,12 +309,12 @@ export class KyselyAdapter<
       const countQuery = this.createCountQuery(params)
       try {
         const [queryResult, countQueryResult] = await Promise.all([
-          q.execute(),
-          countQuery.execute(),
+          filters.$limit !== 0 ? q.execute() : undefined,
+          countQuery.executeTakeFirst(),
         ])
 
         const data = filters.$limit === 0 ? [] : queryResult
-        const total = (countQueryResult[0] as any).total
+        const total = Number(countQueryResult?.total) || 0
 
         return {
           total,

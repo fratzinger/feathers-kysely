@@ -1,30 +1,49 @@
 import type { Dialect } from 'kysely'
 import { MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
+import type { PoolConfig } from 'pg'
 import { Pool } from 'pg'
 import { createPool } from 'mysql2'
 import Database from 'better-sqlite3'
 
 const createdDialects: Record<string, Dialect> = {}
 
-export default (DB?: 'postgres' | 'mysql' | 'sqlite'): Dialect => {
-  console.log(process.env.DB)
-  DB ||= (process.env.DB as any) || 'sqlite'
+const dialectValues = ['postgres', 'mysql', 'sqlite'] as const
+export type DialectType = (typeof dialectValues)[number]
+
+export const getDialect = (): DialectType => {
+  if (!process.env.DB) return 'sqlite'
+  if (dialectValues.includes(process.env.DB as any))
+    return process.env.DB as DialectType
+
+  return 'sqlite'
+}
+
+export default (): Dialect => {
+  const DB = getDialect()
 
   if (createdDialects[DB]) {
     return createdDialects[DB]
   }
 
   if (DB === 'postgres') {
-    console.log('Using Postgres')
+    const config: PoolConfig = {
+      host: 'localhost',
+      user: process.env.POSTGRES_USER ?? 'postgres',
+      password:
+        'POSTGRES_PASSWORD' in process.env
+          ? process.env.POSTGRES_PASSWORD
+          : 'password',
+      database: process.env.POSTGRES_DB ?? 'test',
+      port: process.env.POSTGRES_PORT
+        ? Number(process.env.POSTGRES_PORT)
+        : 5432,
+      max: 10,
+    }
+
+    console.log(config)
+
     createdDialects[DB] = new PostgresDialect({
-      pool: new Pool({
-        host: 'localhost',
-        user: process.env.POSTGRES_USER ?? 'postgres',
-        password: process.env.POSTGRES_PASSWORD ?? 'password',
-        database: process.env.POSTGRES_DB ?? 'sequelize',
-        port: 5432,
-        max: 10,
-      }),
+      pool: new Pool(config),
     })
   } else if (DB === 'mysql') {
     console.log('Using MySQL')
