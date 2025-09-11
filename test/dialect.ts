@@ -26,6 +26,7 @@ export default (): Dialect => {
   }
 
   if (DB === 'postgres') {
+    console.log('Using Postgres')
     const config: PoolConfig = {
       host: 'localhost',
       user: process.env.POSTGRES_USER ?? 'postgres',
@@ -39,8 +40,6 @@ export default (): Dialect => {
         : 5432,
       max: 10,
     }
-
-    console.log(config)
 
     createdDialects[DB] = new PostgresDialect({
       pool: new Pool(config),

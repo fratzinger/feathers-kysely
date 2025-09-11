@@ -9,12 +9,14 @@ import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
 import type {
+  DialectType,
   KyselyAdapterOptions,
   KyselyAdapterParams,
 } from './declarations.js'
 import type {
   ComparisonOperatorExpression,
   InsertQueryBuilder,
+  Kysely,
   SelectQueryBuilder,
 } from 'kysely'
 
@@ -69,6 +71,24 @@ export class KyselyAdapter<
       },
       operators: [...(options.operators || []), '$like', '$notlike', '$ilike'],
     })
+
+    const dialectType = this.getDatabaseDialect(options.Model)
+
+    this.options.dialectType ??= dialectType
+  }
+
+  private getDatabaseDialect(db?: Kysely<any>): DialectType {
+    const adapterName = (db ?? this.Model)
+      .getExecutor()
+      .adapter.constructor.name.toLowerCase()
+
+    if (adapterName.includes('sqlite')) return 'sqlite'
+    if (adapterName.includes('postgres')) return 'postgres'
+    if (adapterName.includes('mysql')) return 'mysql'
+    if (adapterName.includes('mssql') || adapterName.includes('sqlserver'))
+      return 'mssql'
+
+    return 'sqlite'
   }
 
   // get fullName() {
@@ -80,7 +100,9 @@ export class KyselyAdapter<
     return this.getModel()
   }
 
-  getOptions(params: ServiceParams): KyselyAdapterOptions & { id: string } {
+  getOptions(
+    params: ServiceParams,
+  ): KyselyAdapterOptions & { id: string; dialectType: DialectType } {
     return super.getOptions(params) as KyselyAdapterOptions & { id: string }
   }
 
@@ -98,7 +120,10 @@ export class KyselyAdapter<
       $skip = 0,
       ...query
     } = (params.query || {}) as AdapterQuery
-    const $limit = getLimit(_limit, options.paginate)
+    const $limit =
+      options.dialectType === 'sqlite' && $skip
+        ? getLimit(_limit, options.paginate) || -1
+        : getLimit(_limit, options.paginate)
 
     return {
       paginate: options.paginate,
@@ -110,7 +135,6 @@ export class KyselyAdapter<
   createQuery(options: KyselyAdapterOptions, filters: any, query: any) {
     const q = this.startSelectQuery(options, filters, query)
     const qWhere = this.applyWhere(q, query)
-    console.log(filters.$limit)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
     const qSorted = this.applySort(qSkip, filters)
