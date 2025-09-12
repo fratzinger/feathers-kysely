@@ -2,6 +2,7 @@ import type { Dialect } from 'kysely'
 import { MysqlDialect, PostgresDialect, SqliteDialect } from 'kysely'
 import type { PoolConfig } from 'pg'
 import { Pool } from 'pg'
+import type { PoolOptions } from 'mysql2'
 import { createPool } from 'mysql2'
 import Database from 'better-sqlite3'
 
@@ -46,15 +47,19 @@ export default (): Dialect => {
     })
   } else if (DB === 'mysql') {
     console.log('Using MySQL')
+
+    const config: PoolOptions = {
+      database: process.env.MYSQL_DATABASE ?? 'test',
+      host: process.env.MYSQL_HOST ?? 'localhost',
+      user: process.env.MYSQL_USER ?? 'root',
+      password:
+        'MYSQL_PASSWORD' in process.env ? process.env.MYSQL_PASSWORD : '',
+      port: process.env.MYSQL_PORT ? Number(process.env.MYSQL_PORT) : 3306,
+      connectionLimit: 10,
+    }
+
     createdDialects[DB] = new MysqlDialect({
-      pool: createPool({
-        database: process.env.MYSQL_DATABASE ?? 'test',
-        host: process.env.MYSQL_HOST ?? 'localhost',
-        user: process.env.MYSQL_USER ?? 'root',
-        password: process.env.MYSQL_PASSWORD ?? '',
-        port: process.env.MYSQL_PORT ? Number(process.env.MYSQL_PORT) : 3306,
-        connectionLimit: 10,
-      }) as any,
+      pool: createPool(config) as any,
     })
   } else {
     console.log('Using SQLite')

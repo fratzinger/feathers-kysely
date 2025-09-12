@@ -18,7 +18,9 @@ import type {
   InsertQueryBuilder,
   Kysely,
   SelectQueryBuilder,
+  UpdateQueryBuilder,
 } from 'kysely'
+import { applySelectId } from './utils.js'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -35,7 +37,10 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $ne: '!=',
 }
 
-// const RETURNING_CLIENTS = ['postgresql', 'pg', 'oracledb', 'mssql']
+type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
+  id: string
+  dialectType: DialectType
+}
 
 export class KyselyAdapter<
   Result extends Record<string, any>,
@@ -100,13 +105,8 @@ export class KyselyAdapter<
     return this.getModel()
   }
 
-  getOptions(
-    params: ServiceParams,
-  ): KyselyAdapterOptions & { id: string; dialectType: DialectType } {
-    return super.getOptions(params) as KyselyAdapterOptions & {
-      id: string
-      dialectType: DialectType
-    }
+  getOptions(params: ServiceParams): KyselyAdapterOptionsDefined {
+    return super.getOptions(params) as KyselyAdapterOptionsDefined
   }
 
   getModel(params: ServiceParams = {} as ServiceParams) {
@@ -123,14 +123,23 @@ export class KyselyAdapter<
       $skip = 0,
       ...query
     } = (params.query || {}) as AdapterQuery
-    const $limit =
-      options.dialectType === 'sqlite' && $skip
-        ? getLimit(_limit, options.paginate) || -1
-        : getLimit(_limit, options.paginate)
+    const $limit = $skip
+      ? (getLimit(_limit, options.paginate) ??
+        (options.dialectType === 'sqlite'
+          ? -1
+          : options.dialectType === 'mysql'
+            ? 4294967295 /** max value for mysql */
+            : undefined))
+      : getLimit(_limit, options.paginate)
 
     return {
       paginate: options.paginate,
-      filters: { $select, $sort, $limit, $skip },
+      filters: {
+        $select: applySelectId($select, options.id),
+        $sort,
+        $limit,
+        $skip,
+      },
       query: this.convertValues(query),
     }
   }
@@ -148,9 +157,7 @@ export class KyselyAdapter<
     const { name, id: idField } = options
     let q = this.Model.selectFrom(name)
     q = this.applyInnerJoin(q, query)
-    return filters.$select
-      ? q.select([...new Set([...filters.$select, idField])])
-      : q.selectAll()
+    return filters.$select ? q.select(filters.$select) : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
@@ -332,8 +339,15 @@ export class KyselyAdapter<
     const options = this.getOptions(params)
     const q = this.createQuery(options, filters, query)
 
+    const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
+
     if (paginate && paginate.default) {
       const countQuery = this.createCountQuery(params)
+
+      const compiledCount = countQuery.compile()
+      // console.log(compiledCount.sql, compiledCount.parameters)
+
       try {
         const [queryResult, countQueryResult] = await Promise.all([
           filters.$limit !== 0 ? q.execute() : undefined,
@@ -376,11 +390,13 @@ export class KyselyAdapter<
     const { id: idField } = options
     const { filters, query } = this.filterQuery(params)
 
-    if (id != null && query[idField] != null) throw new NotFound()
-
     const q = this.startSelectQuery(options, filters, query)
-    const qWhere = this.applyWhere(q, { [idField]: id, ...query })
-    const compiled = qWhere.compile()
+    const qWhere = this.applyWhere(
+      q,
+      !(idField in query)
+        ? { [idField]: id, ...query }
+        : { ...query, $and: [...(query.$and || []), { [idField]: id }] },
+    )
     try {
       const item = await qWhere.executeTakeFirst()
 
@@ -391,6 +407,56 @@ export class KyselyAdapter<
       errorHandler(error)
       throw error
     }
+  }
+
+  private async executeAndReturn<
+    Q extends
+      | InsertQueryBuilder<any, any, any>
+      | UpdateQueryBuilder<any, any, any, any>,
+  >(
+    q: Q,
+    context: {
+      isArray: boolean
+      options: KyselyAdapterOptionsDefined
+      $select?: string[]
+      ids?: number[]
+    },
+  ) {
+    const { isArray, options, $select } = context
+    const { id: idField, name, dialectType } = options
+
+    const qReturning =
+      dialectType !== 'mysql'
+        ? $select
+          ? q.returning($select)
+          : q.returningAll()
+        : q
+
+    const response = await (isArray && dialectType !== 'mysql'
+      ? qReturning.execute()
+      : qReturning.executeTakeFirst())
+
+    if (dialectType !== 'mysql') {
+      return response
+    }
+
+    // mysql only
+
+    const { insertId, numInsertedOrUpdatedRows } = response as any
+    const id = Number(insertId)
+    const count = Number(numInsertedOrUpdatedRows)
+
+    const ids =
+      context.ids ||
+      (isArray ? [...Array(count).keys()].map((i) => id + i) : [id])
+
+    const from = this.Model.selectFrom(name)
+    const selected = $select ? from.select($select) : from.selectAll()
+    const where =
+      ids.length === 1
+        ? selected.where(idField, '=', ids[0])
+        : selected.where(idField, 'in', ids)
+    return isArray ? where.execute() : where.executeTakeFirst()
   }
 
   /**
@@ -409,27 +475,24 @@ export class KyselyAdapter<
     _data: Data | Data[],
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Result | Result[]> {
-    const { name, id: idField } = this.getOptions(params)
+    const options = this.getOptions(params)
+    const { name, id: idField } = options
     const { filters } = this.filterQuery(params)
     const isArray = Array.isArray(_data)
-    const $select = filters.$select?.length
-      ? filters.$select.concat(idField)
-      : undefined
+    const $select = applySelectId(filters.$select, idField)
 
     const convertedData = isArray
       ? _data.map((d) => this.convertValues(d as any))
       : [this.convertValues(_data as any)]
     const q = this.Model.insertInto(name).values(convertedData)
 
-    const qReturning = this.applyReturning(q, Object.keys(convertedData[0]))
-
-    const compiled = qReturning.compile()
-
-    const request = isArray
-      ? qReturning.execute()
-      : qReturning.executeTakeFirst()
     try {
-      const response = (await request)!
+      const response = await this.executeAndReturn(q, {
+        isArray,
+        options,
+        $select,
+      })
+
       const toReturn = $select?.length
         ? isArray
           ? response.map((i: any) => _.pick(i, ...$select))
@@ -440,6 +503,76 @@ export class KyselyAdapter<
     } catch (error) {
       errorHandler(error)
       throw error
+    }
+  }
+
+  private async getWhereForUpdate(
+    id: NullableId,
+    _data: PatchData,
+    params: ServiceParams,
+  ) {
+    const asMulti = id === null
+    const options = this.getOptions(params)
+    const { name, id: idField, dialectType } = options
+    let { filters, query } = this.filterQuery(params)
+
+    const q = this.Model.updateTable(name).set(_.omit(_data, idField))
+
+    if (dialectType !== 'mysql') {
+      if (id !== null) {
+        if (!(idField in query)) {
+          query = { ...query, [idField]: id }
+        } else {
+          query = {
+            ...query,
+            $and: [...(query.$and || []), { [idField]: id }],
+          }
+        }
+      }
+
+      return {
+        q: this.applyWhere(q, query),
+      }
+    }
+
+    // mysql does not allow sophisticated where in update statements
+    // so we need to do a find/get first to get the ids
+
+    if (id !== null) {
+      await this._get(id, {
+        ...params,
+        query: {
+          ...params.query,
+          $select: [idField],
+        },
+      }).catch((err) => {
+        throw new NotFound(`No record found for ${idField} '${id}'`)
+      })
+
+      return { q: q.where(idField, '=', id) }
+    }
+
+    const items = await this._find({
+      ...params,
+      query: {
+        ...params.query,
+        $select: [idField],
+      },
+      paginate: false,
+    })
+
+    const ids = items.map((item) => item[idField])
+
+    if (ids.length === 0) {
+      return { q: undefined }
+    }
+
+    return {
+      q:
+        ids.length === 1
+          ? q.where(idField, '=', ids[0])
+          : q.where(idField, 'in', ids),
+      ids,
     }
   }
 
@@ -470,46 +603,31 @@ export class KyselyAdapter<
       throw new MethodNotAllowed('Can not patch multiple entries')
     }
     const asMulti = id === null
-    const { name, id: idField } = this.getOptions(params)
-    const { filters, query } = this.filterQuery(params)
-    const $select = filters.$select?.length
-      ? filters.$select.concat(idField)
-      : undefined
+    const options = this.getOptions(params)
+    const { id: idField } = options
+    const { filters } = this.filterQuery(params)
 
-    if (id != null && query[idField] != null) throw new NotFound()
+    const { q, ids } = await this.getWhereForUpdate(id, _data, params)
 
-    const q = this.Model.updateTable(name).set(_.omit(_data, idField))
-    const qWhere = this.applyWhere(
-      q,
-      asMulti ? query : id == null ? query : { [idField]: id, ...query },
-    )
-    const toSelect = filters.$select?.length
-      ? filters.$select
-      : Object.keys(_data as any)
-    const qReturning = this.applyReturning(
-      qWhere as any,
-      toSelect.concat(idField),
-    )
+    if (!q) {
+      return [] // nothing to patch
+    }
 
-    const compiled = qReturning.compile()
+    const compiled = q.compile()
 
-    const request = asMulti
-      ? qReturning.execute()
-      : qReturning.executeTakeFirst()
     try {
-      const response = await request
+      const response = await this.executeAndReturn(q, {
+        isArray: asMulti,
+        options,
+        $select: filters.$select,
+        ids: id == null ? ids : [Number(id)],
+      })
 
       if (!asMulti && !response) {
         throw new NotFound(`No record found for ${idField} '${id}'`)
       }
 
-      const toReturn = $select?.length
-        ? Array.isArray(response)
-          ? response.map((i: any) => _.pick(i, ...$select))
-          : _.pick(response, ...$select)
-        : response
-
-      return toReturn as Result | Result[]
+      return response as Result | Result[]
     } catch (error) {
       errorHandler(error)
       throw error
