@@ -20,9 +20,6 @@ importers:
       '@feathersjs/feathers':
         specifier: ^5.0.35
         version: 5.0.35
-      better-sqlite3:
-        specifier: ^12.2.0
-        version: 12.2.0
     devDependencies:
       '@feathers-community/eslint-config':
         specifier: ^0.0.8
@@ -34,11 +31,14 @@ importers:
         specifier: ^7.6.13
         version: 7.6.13
       '@types/node':
-        specifier: ^24.3.1
-        version: 24.3.1
+        specifier: ^24.5.0
+        version: 24.5.0
       '@types/pg':
         specifier: ^8.15.5
         version: 8.15.5
+      better-sqlite3:
+        specifier: ^12.2.0
+        version: 12.2.0
       dotenv:
         specifier: ^17.2.2
         version: 17.2.2
@@ -46,11 +46,11 @@ importers:
         specifier: ^9.35.0
         version: 9.35.0
       feathers-adapter-vitest:
-        specifier: ^0.0.4
-        version: 0.0.4(vitest@3.2.4(@types/node@24.3.1))
+        specifier: ^0.0.6
+        version: 0.0.6(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0))
       kysely:
-        specifier: ^0.28.5
-        version: 0.28.5
+        specifier: ^0.28.7
+        version: 0.28.7
       mysql2:
         specifier: ^3.14.5
         version: 3.14.5
@@ -74,10 +74,10 @@ importers:
         version: 5.9.2
       vite:
         specifier: ^7.1.5
-        version: 7.1.5(@types/node@24.3.1)
+        version: 7.1.5(@types/node@24.5.0)
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/node@24.3.1)
+        version: 3.2.4(@types/node@24.5.0)
 
 packages:
 
@@ -603,8 +603,8 @@ packages:
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
 
-  '@types/node@24.3.1':
-    resolution: {integrity: sha512-3vXmQDXy+woz+gnrTvuvNrPzekOi+Ds0ReMxw0LzBiK3a+1k0kQn9f2NWk+lgD4rJehFUmYy2gMhJ2ZI+7YP9g==}
+  '@types/node@24.5.0':
+    resolution: {integrity: sha512-y1dMvuvJspJiPSDZUQ+WMBvF7dpnEqN4x9DDC9ie5Fs/HUZJA3wFp7EhHoVaKX/iI0cRoECV8X2jL8zi0xrHCg==}
 
   '@types/pg@8.15.5':
     resolution: {integrity: sha512-LF7lF6zWEKxuT3/OR8wAZGzkg4ENGXFNyiV/JeOt9z5B+0ZVwbql9McqX5c/WStFq1GaGso7H1AzP/qSzmlCKQ==}
@@ -1323,11 +1323,27 @@ packages:
       picomatch:
         optional: true
 
-  feathers-adapter-vitest@0.0.4:
-    resolution: {integrity: sha512-+NfwhuPegLmY09Rgz34zHibemX+Ivrp2uRj3EyF7AGjhvWajxMmS7cQvkEklTMGTNYmt9zrQgizXCfpetJF/Dw==}
+  feathers-adapter-vitest@0.0.6:
+    resolution: {integrity: sha512-l6W05QRAGGDfvX7Qkz9s2GtRjnzc1VP3yKe+HO5rdcuQNI6kg26EOh52R4Nz73kZScj8TXopCJhOe/nhpSHS8g==}
     engines: {node: '>= 22'}
     peerDependencies:
+      '@feathersjs/knex': '>=5'
+      '@feathersjs/memory': '>=5'
+      feathers-sequelize: '>=7'
+      pg: '>=8'
+      sequelize: '>=6'
       vitest: ^3.0.0
+    peerDependenciesMeta:
+      '@feathersjs/knex':
+        optional: true
+      '@feathersjs/memory':
+        optional: true
+      feathers-sequelize:
+        optional: true
+      pg:
+        optional: true
+      sequelize:
+        optional: true
 
   file-entry-cache@8.0.0:
     resolution: {integrity: sha512-XXTUwCvisa5oacNGRP9SfNtYBNAMi+RPwBFmblZEF7N7swHYQS6/Zfk7SRwx4D5j3CH211YNRco1DEMNVfZCnQ==}
@@ -1685,8 +1701,8 @@ packages:
   keyv@4.5.4:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
 
-  kysely@0.28.5:
-    resolution: {integrity: sha512-rlB0I/c6FBDWPcQoDtkxi9zIvpmnV5xoIalfCMSMCa7nuA6VGA3F54TW9mEgX4DVf10sXAWCF5fDbamI/5ZpKA==}
+  kysely@0.28.7:
+    resolution: {integrity: sha512-u/cAuTL4DRIiO2/g4vNGRgklEKNIj5Q3CG7RoUB5DV5SfEC2hMvPxKi0GWPmnzwL2ryIeud2VTcEEmqzTzEPNw==}
     engines: {node: '>=20.0.0'}
 
   levn@0.4.1:
@@ -2525,8 +2541,8 @@ packages:
   ufo@1.6.1:
     resolution: {integrity: sha512-9a4/uxlTWJ4+a5i0ooc1rU7C7YOw3wT+UGqdeNNHWnOF9qcMBgLRS+4IYUqbczewFx4mLEig6gawh7X6mFlEkA==}
 
-  undici-types@7.10.0:
-    resolution: {integrity: sha512-t5Fy/nfn+14LuOc2KNYg75vZqClpAiqscVvMygNnlsHBFpSXdJaYtXMcdNLpl/Qvc3P2cB3s6lOV51nqsFq4ag==}
+  undici-types@7.12.0:
+    resolution: {integrity: sha512-goOacqME2GYyOZZfb5Lgtu+1IDmAlAEu5xnD3+xTzS10hT0vzpf0SPjkXwAw9Jm+4n/mQGDP3LO8CPbYROeBfQ==}
 
   unique-filename@1.1.1:
     resolution: {integrity: sha512-Vmp0jIp2ln35UTXuryvjzkjGdRyf9b2lTXuSYUiPmzRcl3FDtYqAwOnTJkAngD9SWhnoJzDbTKwaOrZ+STtxNQ==}
@@ -3183,7 +3199,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 24.3.1
+      '@types/node': 24.5.0
 
   '@types/chai@5.2.2':
     dependencies:
@@ -3195,13 +3211,13 @@ snapshots:
 
   '@types/json-schema@7.0.15': {}
 
-  '@types/node@24.3.1':
+  '@types/node@24.5.0':
     dependencies:
-      undici-types: 7.10.0
+      undici-types: 7.12.0
 
   '@types/pg@8.15.5':
     dependencies:
-      '@types/node': 24.3.1
+      '@types/node': 24.5.0
       pg-protocol: 1.10.3
       pg-types: 2.2.0
 
@@ -3365,13 +3381,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.2.4(vite@7.1.5(@types/node@24.3.1))':
+  '@vitest/mocker@3.2.4(vite@7.1.5(@types/node@24.5.0))':
     dependencies:
       '@vitest/spy': 3.2.4
       estree-walker: 3.0.3
       magic-string: 0.30.19
     optionalDependencies:
-      vite: 7.1.5(@types/node@24.3.1)
+      vite: 7.1.5(@types/node@24.5.0)
 
   '@vitest/pretty-format@3.2.4':
     dependencies:
@@ -3968,11 +3984,13 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.3
 
-  feathers-adapter-vitest@0.0.4(vitest@3.2.4(@types/node@24.3.1)):
+  feathers-adapter-vitest@0.0.6(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0)):
     dependencies:
       '@feathersjs/errors': 5.0.35
       '@feathersjs/feathers': 5.0.35
-      vitest: 3.2.4(@types/node@24.3.1)
+      vitest: 3.2.4(@types/node@24.5.0)
+    optionalDependencies:
+      pg: 8.16.3
 
   file-entry-cache@8.0.0:
     dependencies:
@@ -4321,7 +4339,7 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
-  kysely@0.28.5: {}
+  kysely@0.28.7: {}
 
   levn@0.4.1:
     dependencies:
@@ -5205,7 +5223,7 @@ snapshots:
 
   ufo@1.6.1: {}
 
-  undici-types@7.10.0: {}
+  undici-types@7.12.0: {}
 
   unique-filename@1.1.1:
     dependencies:
@@ -5257,13 +5275,13 @@ snapshots:
 
   validate-npm-package-name@6.0.2: {}
 
-  vite-node@3.2.4(@types/node@24.3.1):
+  vite-node@3.2.4(@types/node@24.5.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.1
       es-module-lexer: 1.7.0
       pathe: 2.0.3
-      vite: 7.1.5(@types/node@24.3.1)
+      vite: 7.1.5(@types/node@24.5.0)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -5278,7 +5296,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite@7.1.5(@types/node@24.3.1):
+  vite@7.1.5(@types/node@24.5.0):
     dependencies:
       esbuild: 0.25.9
       fdir: 6.5.0(picomatch@4.0.3)
@@ -5287,14 +5305,14 @@ snapshots:
       rollup: 4.50.1
       tinyglobby: 0.2.15
     optionalDependencies:
-      '@types/node': 24.3.1
+      '@types/node': 24.5.0
       fsevents: 2.3.3
 
-  vitest@3.2.4(@types/node@24.3.1):
+  vitest@3.2.4(@types/node@24.5.0):
     dependencies:
       '@types/chai': 5.2.2
       '@vitest/expect': 3.2.4
-      '@vitest/mocker': 3.2.4(vite@7.1.5(@types/node@24.3.1))
+      '@vitest/mocker': 3.2.4(vite@7.1.5(@types/node@24.5.0))
       '@vitest/pretty-format': 3.2.4
       '@vitest/runner': 3.2.4
       '@vitest/snapshot': 3.2.4
@@ -5312,11 +5330,11 @@ snapshots:
       tinyglobby: 0.2.15
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
-      vite: 7.1.5(@types/node@24.3.1)
-      vite-node: 3.2.4(@types/node@24.3.1)
+      vite: 7.1.5(@types/node@24.5.0)
+      vite-node: 3.2.4(@types/node@24.5.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 24.3.1
+      '@types/node': 24.5.0
     transitivePeerDependencies:
       - jiti
       - less
