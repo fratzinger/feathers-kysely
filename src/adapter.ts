@@ -614,7 +614,9 @@ export class KyselyAdapter<
 
     const { id: idField, name } = this.options
 
-    const updateTable = this.Model.updateTable(name).set(_.omit(_data, idField))
+    const data = this.convertValues(_data)
+
+    const updateTable = this.Model.updateTable(name).set(_.omit(data, idField))
 
     const { q, ids } = await this.getWhereForUpdateOrDelete(
       updateTable,
@@ -628,6 +630,7 @@ export class KyselyAdapter<
     }
 
     // const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
 
     try {
       const response = await this.executeAndReturn(q, {
@@ -660,7 +663,13 @@ export class KyselyAdapter<
     }
 
     const data = _.omit(_data, this.id)
-    const oldData = await this._get(id, params)
+    const oldData = await this._get(id, {
+      ...params,
+      query: {
+        ...params.query,
+        $select: undefined,
+      },
+    })
     // New data changes all fields except id
     const newObject = Object.keys(oldData).reduce((result: any, key) => {
       if (key !== this.id) {
