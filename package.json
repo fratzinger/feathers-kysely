@@ -68,7 +68,6 @@
     "nyc": "^17.1.0",
     "pg": "^8.16.3",
     "shx": "^0.4.0",
-    "sqlite3": "^5.1.7",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",
@@ -78,5 +77,10 @@
     "@feathersjs/feathers": "^5.0.0",
     "kysely": "^0.28.0"
   },
-  "packageManager": "pnpm@10.16.1"
+  "packageManager": "pnpm@10.16.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
 }
