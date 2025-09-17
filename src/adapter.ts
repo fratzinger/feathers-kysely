@@ -164,8 +164,8 @@ export class KyselyAdapter<
     }
   }
 
-  createQuery(options: KyselyAdapterOptions, filters: any, query: any) {
-    const q = this.startSelectQuery(options, filters, query)
+  createQuery(filters: any, query: any) {
+    const q = this.startSelectQuery(filters, query)
     const qWhere = this.applyWhere(q, query)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
@@ -173,18 +173,16 @@ export class KyselyAdapter<
     return qSorted
   }
 
-  startSelectQuery(options: KyselyAdapterOptions, filters: any, query: any) {
-    const { name, id: idField } = options
-    let q = this.Model.selectFrom(name)
+  startSelectQuery(filters: any, query: any) {
+    let q = this.Model.selectFrom(this.options.name)
     q = this.applyInnerJoin(q, query)
     return filters.$select ? q.select(filters.$select) : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
-    const options = this.getOptions(params)
     const { query } = this.filterQuery(params)
 
-    const { name, id: idField } = options
+    const { name, id: idField } = this.options
     const q = this.Model.selectFrom(name)
     const joined = this.applyInnerJoin(q, query)
     const selected = joined.select(this.Model.fn.count(idField).as('total'))
@@ -329,12 +327,12 @@ export class KyselyAdapter<
   >(q: Q, $select: string[] | undefined): Q {
     return this.options.dialectType !== 'mysql'
       ? $select
-        ? q.returning($select)
-        : q.returningAll()
+        ? (q as any).returning($select)
+        : (q as any).returningAll()
       : q
   }
 
-  private convertValues(data) {
+  private convertValues<T>(data: T): T {
     if (this.options.dialectType !== 'sqlite') {
       return data
     }
@@ -356,8 +354,8 @@ export class KyselyAdapter<
   async _find(
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Paginated<Result> | Result[]> {
-    const { filters, query, paginate, options } = this.filterQuery(params)
-    const q = this.createQuery(options, filters, query)
+    const { filters, query, paginate } = this.filterQuery(params)
+    const q = this.createQuery(filters, query)
 
     // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
@@ -408,7 +406,7 @@ export class KyselyAdapter<
     const { filters, query, options } = this.filterQuery(params, id)
     const { id: idField } = options
 
-    const q = this.startSelectQuery(options, filters, query)
+    const q = this.startSelectQuery(filters, query)
     const qWhere = this.applyWhere(q, query)
     try {
       const item = await qWhere.executeTakeFirst()
@@ -487,7 +485,9 @@ export class KyselyAdapter<
     const isArray = Array.isArray(_data)
     const $select = applySelectId(filters.$select, idField)
 
-    const q = this.Model.insertInto(name).values(this.convertValues(_data))
+    const q = this.Model.insertInto(name).values(
+      this.convertValues(_data) as any,
+    )
 
     const returning = this.applyReturning(q, $select)
 
@@ -508,7 +508,7 @@ export class KyselyAdapter<
     }
   }
 
-  private async getWhereForUpdate<
+  private async getWhereForUpdateOrDelete<
     Q extends
       | UpdateQueryBuilder<any, any, any, any>
       | DeleteQueryBuilder<any, any, any>,
@@ -526,6 +526,8 @@ export class KyselyAdapter<
       const returning = this.applyReturning(withWhere, filters.$select)
       const result = {
         q: returning,
+        ids: undefined,
+        items: undefined,
       }
 
       return result
@@ -548,7 +550,7 @@ export class KyselyAdapter<
       const withWhere = (q as any).where(idField, '=', id)
       const returning = this.applyReturning(withWhere, filters.$select)
 
-      return { q: returning as Q, items: [result] }
+      return { q: returning as Q, ids: [id], items: [result] }
     }
 
     const items = await this._find({
@@ -563,13 +565,13 @@ export class KyselyAdapter<
     const ids = items.map((item) => item[idField])
 
     if (ids.length === 0) {
-      return { q: undefined }
+      return { q: undefined, ids: undefined, items: undefined }
     }
 
     const withWhere =
       ids.length === 1
-        ? q.where(idField, '=', ids[0])
-        : q.where(idField, 'in', ids)
+        ? (q as any).where(idField, '=', ids[0])
+        : (q as any).where(idField, 'in', ids)
 
     const returning = this.applyReturning(withWhere, filters.$select)
 
@@ -608,28 +610,31 @@ export class KyselyAdapter<
     }
     const asMulti = id === null
 
-    const { filters, options, query } = this.filterQuery(params, id)
+    const { filters, options } = this.filterQuery(params, id)
 
     const { id: idField, name } = this.options
 
     const updateTable = this.Model.updateTable(name).set(_.omit(_data, idField))
 
-    const { q, ids } = await this.getWhereForUpdate(updateTable, id, params, [
-      this.options.id,
-    ])
+    const { q, ids } = await this.getWhereForUpdateOrDelete(
+      updateTable,
+      id,
+      params,
+      [this.options.id],
+    )
 
     if (!q) {
       return [] // nothing to patch
     }
 
-    const compiled = q.compile()
+    // const compiled = q.compile()
 
     try {
       const response = await this.executeAndReturn(q, {
         isArray: asMulti,
         options,
         $select: filters.$select,
-        ids: id == null ? ids : [Number(id)],
+        ids,
       })
 
       if (!asMulti && !response) {
@@ -693,7 +698,7 @@ export class KyselyAdapter<
 
     const deleteFrom = this.Model.deleteFrom(this.options.name)
 
-    const { q, items: maybeItems } = await this.getWhereForUpdate(
+    const { q, items: maybeItems } = await this.getWhereForUpdateOrDelete(
       deleteFrom,
       id,
       params,

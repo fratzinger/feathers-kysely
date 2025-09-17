@@ -3,9 +3,7 @@ export function applySelectId($select: string[] | undefined, idField: string) {
   return $select.includes(idField) ? $select : $select.concat(idField)
 }
 
-export function convertBooleansToNumbers<
-  T extends Record<string, any> | any[] | boolean,
->(data: T): T {
+export function convertBooleansToNumbers<T>(data: T): T {
   // Handle primitive types
   if (typeof data === 'boolean') {
     return data ? (1 as any) : (0 as any)
@@ -37,11 +35,11 @@ export function convertBooleansToNumbers<
 
   // Handle objects
   let modified = false
-  const result = {}
+  const result = {} as T
 
   for (const key in data) {
-    if (data.hasOwnProperty(key)) {
-      const converted = convertBooleansToNumbers(data[key])
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      const converted = convertBooleansToNumbers(data[key] as any)
       result[key] = converted
 
       // Track if any modifications were made
@@ -52,5 +50,5 @@ export function convertBooleansToNumbers<
   }
 
   // Return original object if no changes were needed
-  return modified ? (result as T) : data
+  return modified ? result : data
 }
