@@ -1,20 +1,27 @@
-import { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
+import type { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
 import { _ } from '@feathersjs/commons'
-import { AdapterBase, PaginationOptions, AdapterQuery, getLimit } from '@feathersjs/adapter-commons'
+import type {
+  PaginationOptions,
+  AdapterQuery,
+} from '@feathersjs/adapter-commons'
+import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
 import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
-import { errorHandler } from './error-handler'
-import { KyselyAdapterOptions, KyselyAdapterParams } from './declarations'
-import {
+import { errorHandler } from './error-handler.js'
+import type {
+  DialectType,
+  KyselyAdapterOptions,
+  KyselyAdapterParams,
+} from './declarations.js'
+import type {
   ComparisonOperatorExpression,
   DeleteQueryBuilder,
-  DeleteResult,
   InsertQueryBuilder,
-  InsertResult,
+  Kysely,
   SelectQueryBuilder,
   UpdateQueryBuilder,
-  UpdateResult,
 } from 'kysely'
+import { applySelectId, convertBooleansToNumbers } from './utils.js'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -27,27 +34,41 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $ilike: 'ilike',
   $in: 'in',
   $nin: 'not in',
+  $eq: '=',
   $ne: '!=',
 }
 
-type DeleteOrInsertBuilder =
-  | DeleteQueryBuilder<any, string, DeleteResult>
-  | InsertQueryBuilder<any, string, InsertResult>
-  | UpdateQueryBuilder<any, string, string, UpdateResult>
+type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
+  id: string
+  dialectType: DialectType
+}
 
-// const RETURNING_CLIENTS = ['postgresql', 'pg', 'oracledb', 'mssql']
+type Filters = {
+  $select: string[] | undefined
+  $sort: Record<string, 1 | -1> | undefined
+  $limit: number | undefined
+  $skip: number | undefined
+}
 
 export class KyselyAdapter<
-  Result,
+  Result extends Record<string, any>,
   Data = Partial<Result>,
   ServiceParams extends KyselyAdapterParams<any> = KyselyAdapterParams,
   PatchData = Partial<Data>,
-> extends AdapterBase<Result, Data, PatchData, ServiceParams, KyselyAdapterOptions> {
-  schema?: string
+> extends AdapterBase<
+  Result,
+  Data,
+  PatchData,
+  ServiceParams,
+  KyselyAdapterOptions
+> {
+  declare options: KyselyAdapterOptionsDefined
 
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
-      throw new Error('You must provide a Kysely instance to the `Model` option')
+      throw new Error(
+        'You must provide a Kysely instance to the `Model` option',
+      )
     }
 
     if (typeof options.name !== 'string') {
@@ -63,6 +84,24 @@ export class KyselyAdapter<
       },
       operators: [...(options.operators || []), '$like', '$notlike', '$ilike'],
     })
+
+    const dialectType = this.getDatabaseDialect(options.Model)
+
+    this.options.dialectType ??= dialectType
+  }
+
+  private getDatabaseDialect(db?: Kysely<any>): DialectType {
+    const adapterName = (db ?? this.Model)
+      .getExecutor()
+      .adapter.constructor.name.toLowerCase()
+
+    if (adapterName.includes('sqlite')) return 'sqlite'
+    if (adapterName.includes('postgres')) return 'postgres'
+    if (adapterName.includes('mysql')) return 'mysql'
+    if (adapterName.includes('mssql') || adapterName.includes('sqlserver'))
+      return 'mssql'
+
+    return 'sqlite'
   }
 
   // get fullName() {
@@ -74,81 +113,154 @@ export class KyselyAdapter<
     return this.getModel()
   }
 
+  getOptions(params: ServiceParams): KyselyAdapterOptionsDefined {
+    return super.getOptions(params) as KyselyAdapterOptionsDefined
+  }
+
   getModel(params: ServiceParams = {} as ServiceParams) {
     const { Model } = this.getOptions(params)
     return Model
   }
 
-  filterQuery(params: ServiceParams) {
+  filterQuery(params: ServiceParams, id?: NullableId) {
     const options = this.getOptions(params)
-    const { $select, $sort, $limit: _limit, $skip = 0, ...query } = (params.query || {}) as AdapterQuery
-    const $limit = $skip ? getLimit(_limit, options.paginate) || -1 : getLimit(_limit, options.paginate)
+    const {
+      $select: _select,
+      $sort,
+      $limit: _limit,
+      $skip = 0,
+      ...query
+    } = (params.query || {}) as AdapterQuery
+    const $limit = $skip
+      ? (getLimit(_limit, options.paginate) ??
+        (options.dialectType === 'sqlite'
+          ? -1
+          : options.dialectType === 'mysql'
+            ? 4294967295 /** max value for mysql */
+            : undefined))
+      : getLimit(_limit, options.paginate)
+
+    const queryWithId =
+      id == null || query[options.id] === id
+        ? query
+        : !(options.id in query)
+          ? { ...query, [options.id]: id }
+          : { ...query, $and: [...(query.$and || []), { [options.id]: id }] }
+
+    const converted = this.convertValues(queryWithId)
+
+    const $select = applySelectId(_select, options.id)
 
     return {
       paginate: options.paginate,
-      filters: { $select, $sort, $limit, $skip },
-      query: this.convertValues(query),
+      filters: {
+        $select,
+        $sort,
+        $limit,
+        $skip,
+      },
+      query: converted,
+      options,
     }
   }
 
-  createQuery(options: KyselyAdapterOptions, filters: any, query: any) {
-    const q = this.startSelectQuery(options, filters)
+  createQuery(filters: any, query: any) {
+    const q = this.startSelectQuery(filters, query)
     const qWhere = this.applyWhere(q, query)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
     const qSorted = this.applySort(qSkip, filters)
-    const compiled = qSorted.compile()
     return qSorted
   }
 
-  startSelectQuery(options: KyselyAdapterOptions, filters: any) {
-    const { name, id: idField } = options
-    const q = this.Model.selectFrom(name)
-    return filters.$select ? q.select(filters.$select.concat(idField)) : q.selectAll()
+  startSelectQuery(filters: any, query: any) {
+    let q = this.Model.selectFrom(this.options.name)
+    q = this.applyInnerJoin(q, query)
+    return filters.$select ? q.select(filters.$select) : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
-    const options = this.getOptions(params)
-    const { id: idField } = options
-    const { filters, query } = this.filterQuery(params)
-    const q = this.startSelectQuery(options, filters)
+    const { query } = this.filterQuery(params)
 
-    const qWhere = this.applyWhere(q, query)
-    const qSorted = this.applySort(qWhere, filters)
+    const { name, id: idField } = this.options
+    const q = this.Model.selectFrom(name)
+    const joined = this.applyInnerJoin(q, query)
+    const selected = joined.select(this.Model.fn.count(idField).as('total'))
 
-    // count
-    const countParams = this.Model.fn.count(idField).as('total')
-    return qSorted.select(countParams)
+    const qWhere = this.applyWhere(selected, query)
+
+    return qWhere
+  }
+
+  applyInnerJoin<Q extends Record<string, any>>(
+    q: Q,
+    query: Query,
+    alreadyJoined: string[] = [],
+  ) {
+    // @ts-expect-error TODO: add it to options
+    if (!this.queryMap) return q
+
+    for (const key in query) {
+      if (key === '$and' || key === '$or') {
+        q = this.applyInnerJoin(q, query[key], alreadyJoined)
+        continue
+      }
+
+      if (!key.includes('.')) continue
+
+      const mapKey = key.split('.')[0]
+
+      // @ts-expect-error TODO: add it to options
+      const map = this.queryMap[mapKey]
+      if (!map) continue
+
+      if (alreadyJoined.includes(mapKey)) continue
+
+      const tableName = map.db || map.service
+      const keyHere = map.keyHere || 'id'
+      const keyThere = map.keyThere || 'id'
+
+      q = q.innerJoin(
+        `${tableName} as ${mapKey}`,
+        `${mapKey}.${keyThere}`,
+        `${this.options.name}.${keyHere}`,
+      )
+    }
+
+    return q
+  }
+
+  getOperator(op: string, value: any) {
+    if (value !== null) {
+      return OPERATORS[op]
+    }
+
+    if (op === '$ne') return 'is not'
+    if (op === '$eq') return 'is'
+    return OPERATORS[op]
   }
 
   applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
-    return Object.entries(query).reduce((q, [key, value]) => {
-      // if (key === '$or') {
-      //   return value.reduce((q: Q, subParams: Query) => {
-      //     return q.orWhere((subQ: Q) => this.applyWhere(subQ, subParams))
-      //   }, q)
-      // } else
-      if (['$and', '$or'].includes(key)) {
+    return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
+      if (['$and', '$or'].includes(queryKey)) {
         return q.where((qb: any) => {
-          return this.handleAndOr(qb, key, value)
+          return this.handleAndOr(qb, queryKey, queryProperty)
         })
-      } else if (_.isObject(value)) {
+      } else if (_.isObject(queryProperty)) {
         // loop through OPERATORS and apply them
-        const qOperators = Object.entries(OPERATORS).reduce((q, [operator, op]) => {
-          if (value?.hasOwnProperty(operator)) {
-            const val = value[operator]
-            if (val === null) {
-              const nullOperator = operator === '$ne' ? 'is not' : 'is'
-              return q.where(key, nullOperator, val)
-            } else return q.where(key, op, value[operator])
-          }
-          return q
-        }, q)
-        return qOperators
+        for (const operator in queryProperty) {
+          const value = queryProperty[operator]
+          const op = this.getOperator(operator, value)
+          if (!op) continue
+          q = q.where(queryKey, op, value)
+        }
+
+        return q
       } else {
-        if (value === null) return q.where(key, 'is', value)
-        else return q.where(key, '=', value)
+        const op = this.getOperator('$eq', queryProperty)
+        if (!op) return q
+        return q.where(queryKey, op, queryProperty)
       }
     }, q)
   }
@@ -171,31 +283,35 @@ export class KyselyAdapter<
           return qb.and(
             Object.entries(OPERATORS)
               .filter(([operator, op]) => {
+                // eslint-disable-next-line no-prototype-builtins
                 return value?.hasOwnProperty(operator)
               })
               .map(([operator, op]) => {
                 const val = value[operator]
-                return this.whereCompare(qb, key, op, val)
+                return this.whereCompare(qb, key, operator, val)
               }),
           )
         } else {
-          return this.whereCompare(qb, key, '=', value)
+          return this.whereCompare(qb, key, '$eq', value)
         }
       }),
     )
   }
 
   whereCompare(qb: any, key: string, operator: any, value: any) {
-    if (value === null) {
-      const nullOperator = operator === '$ne' ? 'is not' : 'is'
-      return qb.cmpr(key, nullOperator, value)
-    } else return qb.cmpr(key, operator, value)
+    return qb.eb(key, this.getOperator(operator, value), value)
   }
 
-  applySort<Q extends SelectQueryBuilder<any, string, {}>>(q: Q, filters: any) {
-    return Object.entries(filters.$sort || {}).reduce((q, [key, value]) => {
-      return q.orderBy(key, value === 1 ? 'asc' : 'desc')
-    }, q as SelectQueryBuilder<any, string, {}>)
+  applySort<Q extends SelectQueryBuilder<any, string, any>>(
+    q: Q,
+    filters: any,
+  ) {
+    return Object.entries(filters.$sort || {}).reduce(
+      (q, [key, value]) => {
+        return q.orderBy(key, value === 1 ? 'asc' : 'desc')
+      },
+      q as SelectQueryBuilder<any, string, any>,
+    )
   }
 
   /**
@@ -203,22 +319,26 @@ export class KyselyAdapter<
    * @param q kysely query builder
    * @param data data which is expected to be returned
    */
-  applyReturning<Q extends DeleteOrInsertBuilder>(q: Q, keys: string[]) {
-    return keys.reduce((q, key) => {
-      return q.returning(`${key} as ${key}`)
-    }, q.returningAll())
+  applyReturning<
+    Q extends
+      | InsertQueryBuilder<any, any, any>
+      | UpdateQueryBuilder<any, any, any, any>
+      | DeleteQueryBuilder<any, any, any>,
+  >(q: Q, $select: string[] | undefined): Q {
+    return this.options.dialectType !== 'mysql'
+      ? $select
+        ? (q as any).returning($select)
+        : (q as any).returningAll()
+      : q
   }
 
-  convertValues(data: Record<string, any>) {
-    if (this.options.dialectType !== 'sqlite') return data
-
-    // convert booleans to 0 or 1
-    return Object.entries(data).reduce((data, [key, value]) => {
-      if (typeof value === 'boolean') {
-        return { ...data, [key]: value ? 1 : 0 }
-      }
+  private convertValues<T>(data: T): T {
+    if (this.options.dialectType !== 'sqlite') {
       return data
-    }, data)
+    }
+
+    // see https://github.com/WiseLibs/better-sqlite3/issues/907
+    return convertBooleansToNumbers(data)
   }
 
   /**
@@ -226,21 +346,33 @@ export class KyselyAdapter<
    * See https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html
    * @param params
    */
-  async _find(params?: ServiceParams & { paginate?: PaginationOptions }): Promise<Paginated<Result>>
+  async _find(
+    params?: ServiceParams & { paginate?: PaginationOptions },
+  ): Promise<Paginated<Result>>
   async _find(params?: ServiceParams & { paginate: false }): Promise<Result[]>
   async _find(params?: ServiceParams): Promise<Paginated<Result> | Result[]>
-  async _find(params: ServiceParams = {} as ServiceParams): Promise<Paginated<Result> | Result[]> {
+  async _find(
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Paginated<Result> | Result[]> {
     const { filters, query, paginate } = this.filterQuery(params)
-    const options = this.getOptions(params)
-    const q = this.createQuery(options, filters, query)
+    const q = this.createQuery(filters, query)
+
+    // const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
 
     if (paginate && paginate.default) {
       const countQuery = this.createCountQuery(params)
+
       try {
-        const [queryResult, countQueryResult] = await Promise.all([q.execute(), countQuery.execute()])
+        const [queryResult, countQueryResult] = await Promise.all([
+          filters.$limit !== 0 ? q.execute() : undefined,
+          countQuery.executeTakeFirst(),
+        ])
 
         const data = filters.$limit === 0 ? [] : queryResult
-        const total = (countQueryResult[0] as any).total
+        const total = Number(countQueryResult?.total) || 0
+
+        // console.log(data)
 
         return {
           total,
@@ -250,6 +382,7 @@ export class KyselyAdapter<
         }
       } catch (error) {
         errorHandler(error)
+        throw error
       }
     }
 
@@ -258,6 +391,7 @@ export class KyselyAdapter<
       return data as Result[]
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
@@ -265,16 +399,15 @@ export class KyselyAdapter<
    * Retrieve a single record by id
    * See https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html
    */
-  async _get(id: Id, params: ServiceParams = {} as ServiceParams): Promise<Result> {
-    const options = this.getOptions(params)
-    const { name, id: idField } = options
-    const { filters, query } = this.filterQuery(params)
+  async _get(
+    id: Id,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result> {
+    const { filters, query, options } = this.filterQuery(params, id)
+    const { id: idField } = options
 
-    if (id != null && query[idField] != null) throw new NotFound()
-
-    const q = this.startSelectQuery(options, filters)
-    const qWhere = this.applyWhere(q, { [idField]: id, ...query })
-    const compiled = qWhere.compile()
+    const q = this.startSelectQuery(filters, query)
+    const qWhere = this.applyWhere(q, query)
     try {
       const item = await qWhere.executeTakeFirst()
 
@@ -283,7 +416,52 @@ export class KyselyAdapter<
       return item as Result
     } catch (error) {
       errorHandler(error)
+      throw error
     }
+  }
+
+  private async executeAndReturn<
+    Q extends
+      | InsertQueryBuilder<any, any, any>
+      | UpdateQueryBuilder<any, any, any, any>,
+  >(
+    q: Q,
+    context: {
+      isArray: boolean
+      options: KyselyAdapterOptionsDefined
+      $select?: string[]
+      ids?: number[]
+    },
+  ) {
+    const { isArray, options, $select } = context
+    const { id: idField, name, dialectType } = options
+
+    const response = await (isArray && dialectType !== 'mysql'
+      ? q.execute()
+      : q.executeTakeFirst())
+
+    if (dialectType !== 'mysql') {
+      return response
+    }
+
+    // mysql only
+
+    const { insertId, numInsertedOrUpdatedRows } = response as any
+    const id = Number(insertId)
+    const count = Number(numInsertedOrUpdatedRows)
+
+    const ids =
+      context.ids ||
+      (isArray ? [...Array(count).keys()].map((i) => id + i) : [id])
+
+    const from = this.Model.selectFrom(name)
+    const selected = $select ? from.select($select) : from.selectAll()
+    const where =
+      ids.length === 1
+        ? selected.where(idField, '=', ids[0])
+        : selected.where(idField, 'in', ids)
+
+    return isArray ? where.execute() : where.executeTakeFirst()
   }
 
   /**
@@ -294,35 +472,113 @@ export class KyselyAdapter<
    */
   async _create(data: Data, params?: ServiceParams): Promise<Result>
   async _create(data: Data[], params?: ServiceParams): Promise<Result[]>
-  async _create(data: Data | Data[], _params?: ServiceParams): Promise<Result | Result[]>
+  async _create(
+    data: Data | Data[],
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
   async _create(
     _data: Data | Data[],
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Result | Result[]> {
-    const { name, id: idField } = this.getOptions(params)
-    const { filters } = this.filterQuery(params)
+    const { filters, options } = this.filterQuery(params)
+    const { name, id: idField } = options
     const isArray = Array.isArray(_data)
-    const $select = filters.$select?.length ? filters.$select.concat(idField) : undefined
+    const $select = applySelectId(filters.$select, idField)
 
-    const convertedData = isArray ? _data.map((i) => this.convertValues(i)) : [this.convertValues(_data)]
-    const q = this.Model.insertInto(name).values(convertedData)
+    const q = this.Model.insertInto(name).values(
+      this.convertValues(_data) as any,
+    )
 
-    const qReturning = this.applyReturning(q, Object.keys(convertedData[0]))
+    const returning = this.applyReturning(q, $select)
 
-    const compiled = qReturning.compile()
+    // const compiled = returning.compile()
+    // console.log(compiled.sql, compiled.parameters)
 
-    const request = isArray ? qReturning.execute() : qReturning.executeTakeFirst()
     try {
-      const response = await request
-      const toReturn = filters.$select?.length
-        ? isArray
-          ? response.map((i: any) => _.pick(i, ...$select))
-          : _.pick(response, ...$select)
-        : response
+      const response = await this.executeAndReturn(returning, {
+        isArray,
+        options,
+        $select,
+      })
 
-      return toReturn
+      return response
     } catch (error) {
       errorHandler(error)
+      throw error
+    }
+  }
+
+  private async getWhereForUpdateOrDelete<
+    Q extends
+      | UpdateQueryBuilder<any, any, any, any>
+      | DeleteQueryBuilder<any, any, any>,
+  >(
+    q: Q,
+    id: NullableId,
+    params: ServiceParams,
+    $select?: string[] | undefined,
+  ) {
+    const { filters, options, query } = this.filterQuery(params, id)
+    const { id: idField, dialectType } = options
+
+    if (dialectType !== 'mysql') {
+      const withWhere = this.applyWhere(q, query)
+      const returning = this.applyReturning(withWhere, filters.$select)
+      const result = {
+        q: returning,
+        ids: undefined,
+        items: undefined,
+      }
+
+      return result
+    }
+
+    // mysql does not allow sophisticated where in update/delete statements
+    // so we need to do a find/get first to get the ids
+
+    if (id !== null) {
+      const result = await this._get(id, {
+        ...params,
+        query: {
+          ...params.query,
+          $select: $select || params.query?.$select,
+        },
+      }).catch((err) => {
+        throw new NotFound(`No record found for ${idField} '${id}'`)
+      })
+
+      const withWhere = (q as any).where(idField, '=', id)
+      const returning = this.applyReturning(withWhere, filters.$select)
+
+      return { q: returning as Q, ids: [id], items: [result] }
+    }
+
+    const items = await this._find({
+      ...params,
+      query: {
+        ...params.query,
+        $select: $select || params.query?.$select,
+      },
+      paginate: false,
+    })
+
+    const ids = items.map((item) => item[idField])
+
+    if (ids.length === 0) {
+      return { q: undefined, ids: undefined, items: undefined }
+    }
+
+    const withWhere =
+      ids.length === 1
+        ? (q as any).where(idField, '=', ids[0])
+        : (q as any).where(idField, 'in', ids)
+
+    const returning = this.applyReturning(withWhere, filters.$select)
+
+    return {
+      q: returning as Q,
+      ids,
+      items,
     }
   }
 
@@ -333,9 +589,17 @@ export class KyselyAdapter<
    * @param data
    * @param params
    */
-  async _patch(id: null, data: PatchData, params?: ServiceParams): Promise<Result[]>
+  async _patch(
+    id: null,
+    data: PatchData,
+    params?: ServiceParams,
+  ): Promise<Result[]>
   async _patch(id: Id, data: PatchData, params?: ServiceParams): Promise<Result>
-  async _patch(id: NullableId, data: PatchData, _params?: ServiceParams): Promise<Result | Result[]>
+  async _patch(
+    id: NullableId,
+    data: PatchData,
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
   async _patch(
     id: NullableId,
     _data: PatchData,
@@ -345,42 +609,54 @@ export class KyselyAdapter<
       throw new MethodNotAllowed('Can not patch multiple entries')
     }
     const asMulti = id === null
-    const { name, id: idField } = this.getOptions(params)
-    const { filters, query } = this.filterQuery(params)
-    const $select = filters.$select?.length ? filters.$select.concat(idField) : undefined
 
-    if (id != null && query[idField] != null) throw new NotFound()
+    const { filters, options } = this.filterQuery(params, id)
 
-    const q = this.Model.updateTable(name).set(_.omit(_data, idField))
-    const qWhere = this.applyWhere(q, asMulti ? query : id == null ? query : { [idField]: id, ...query })
-    const toSelect = filters.$select?.length ? filters.$select : Object.keys(_data)
-    const qReturning = this.applyReturning(qWhere, toSelect.concat(idField))
+    const { id: idField, name } = this.options
 
-    const compiled = qReturning.compile()
+    const updateTable = this.Model.updateTable(name).set(_.omit(_data, idField))
 
-    const request = asMulti ? qReturning.execute() : qReturning.executeTakeFirst()
+    const { q, ids } = await this.getWhereForUpdateOrDelete(
+      updateTable,
+      id,
+      params,
+      [this.options.id],
+    )
+
+    if (!q) {
+      return [] // nothing to patch
+    }
+
+    // const compiled = q.compile()
+
     try {
-      const response = await request
+      const response = await this.executeAndReturn(q, {
+        isArray: asMulti,
+        options,
+        $select: filters.$select,
+        ids,
+      })
 
       if (!asMulti && !response) {
         throw new NotFound(`No record found for ${idField} '${id}'`)
       }
 
-      const toReturn = filters.$select?.length
-        ? Array.isArray(response)
-          ? response.map((i: any) => _.pick(i, ...$select))
-          : _.pick(response, ...$select)
-        : response
-
-      return toReturn as Result | Result[]
+      return response as Result | Result[]
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 
-  async _update(id: Id, _data: Data, params: ServiceParams = {} as ServiceParams): Promise<Result> {
-    if (id === null || Array.isArray(_data)) {
-      throw new BadRequest("You can not replace multiple instances. Did you mean 'patch'?")
+  async _update(
+    id: Id,
+    _data: Data,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result> {
+    if (id === null) {
+      throw new BadRequest(
+        "You can not replace multiple instances. Did you mean 'patch'?",
+      )
     }
 
     const data = _.omit(_data, this.id)
@@ -406,30 +682,50 @@ export class KyselyAdapter<
    */
   async _remove(id: null, params?: ServiceParams): Promise<Result[]>
   async _remove(id: Id, params?: ServiceParams): Promise<Result>
-  async _remove(id: NullableId, _params?: ServiceParams): Promise<Result | Result[]>
-  async _remove(id: NullableId, params: ServiceParams = {} as ServiceParams): Promise<Result | Result[]> {
+  async _remove(
+    id: NullableId,
+    _params?: ServiceParams,
+  ): Promise<Result | Result[]>
+  async _remove(
+    id: NullableId,
+    params: ServiceParams = {} as ServiceParams,
+  ): Promise<Result | Result[]> {
     if (id === null && !this.allowsMulti('remove', params)) {
       throw new MethodNotAllowed('Cannot remove multiple entries')
     }
 
-    params.paginate = false
+    const isMulti = id === null
 
-    const originalData = id === null ? await this._find(params) : await this._get(id, params)
-    const { name, id: idField } = this.getOptions(params)
+    const deleteFrom = this.Model.deleteFrom(this.options.name)
 
-    const q = this.Model.deleteFrom(name)
-    const convertedQuery = this.convertValues(id === null ? params.query : { [idField]: id })
-    const qWhere = this.applyWhere(q as any, convertedQuery)
-    const compiled = qWhere.compile()
-    const request = id === null ? qWhere.execute() : qWhere.executeTakeFirst()
+    const { q, items: maybeItems } = await this.getWhereForUpdateOrDelete(
+      deleteFrom,
+      id,
+      params,
+    )
+
+    if (!q) {
+      return isMulti ? [] : Promise.reject(new NotFound())
+    }
+
+    // const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
+
     try {
-      const result = await request
+      const _result = await q.execute()
 
-      if (!result) throw new NotFound(`No record found for id '${id}'`)
+      const result = maybeItems || _result
 
-      return originalData as Result | Result[]
+      if (isMulti) {
+        return result as Result[]
+      }
+
+      if (result.length === 0) throw new NotFound()
+
+      return result[0] as Result
     } catch (error) {
       errorHandler(error)
+      throw error
     }
   }
 }
