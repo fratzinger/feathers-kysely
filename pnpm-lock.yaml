@@ -46,8 +46,8 @@ importers:
         specifier: ^9.35.0
         version: 9.35.0
       feathers-adapter-vitest:
-        specifier: ^0.0.6
-        version: 0.0.6(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0))
+        specifier: ^0.0.8
+        version: 0.0.8(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0))
       kysely:
         specifier: ^0.28.7
         version: 0.28.7
@@ -1323,8 +1323,8 @@ packages:
       picomatch:
         optional: true
 
-  feathers-adapter-vitest@0.0.6:
-    resolution: {integrity: sha512-l6W05QRAGGDfvX7Qkz9s2GtRjnzc1VP3yKe+HO5rdcuQNI6kg26EOh52R4Nz73kZScj8TXopCJhOe/nhpSHS8g==}
+  feathers-adapter-vitest@0.0.8:
+    resolution: {integrity: sha512-Fts1bq3yggUG75yUHy1FlfysDWQFJWnGTbnZJ0EtMHE+JdHAYXmOZi5pDxsq8W7PfumAK+uOc05Wl9opk8v3Jg==}
     engines: {node: '>= 22'}
     peerDependencies:
       '@feathersjs/knex': '>=5'
@@ -3984,7 +3984,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.3
 
-  feathers-adapter-vitest@0.0.6(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0)):
+  feathers-adapter-vitest@0.0.8(pg@8.16.3)(vitest@3.2.4(@types/node@24.5.0)):
     dependencies:
       '@feathersjs/errors': 5.0.35
       '@feathersjs/feathers': 5.0.35

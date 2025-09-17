@@ -21,7 +21,7 @@ import type {
   SelectQueryBuilder,
   UpdateQueryBuilder,
 } from 'kysely'
-import { applySelectId } from './utils.js'
+import { applySelectId, convertBooleansToNumbers } from './utils.js'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -147,6 +147,8 @@ export class KyselyAdapter<
           ? { ...query, [options.id]: id }
           : { ...query, $and: [...(query.$and || []), { [options.id]: id }] }
 
+    const converted = this.convertValues(queryWithId)
+
     const $select = applySelectId(_select, options.id)
 
     return {
@@ -157,7 +159,7 @@ export class KyselyAdapter<
         $limit,
         $skip,
       },
-      query: queryWithId,
+      query: converted,
       options,
     }
   }
@@ -332,6 +334,15 @@ export class KyselyAdapter<
       : q
   }
 
+  private convertValues(data) {
+    if (this.options.dialectType !== 'sqlite') {
+      return data
+    }
+
+    // see https://github.com/WiseLibs/better-sqlite3/issues/907
+    return convertBooleansToNumbers(data)
+  }
+
   /**
    * Retrieve records matching the query
    * See https://kysely-org.github.io/kysely/classes/SelectQueryBuilder.html
@@ -348,14 +359,11 @@ export class KyselyAdapter<
     const { filters, query, paginate, options } = this.filterQuery(params)
     const q = this.createQuery(options, filters, query)
 
-    const compiled = q.compile()
+    // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
 
     if (paginate && paginate.default) {
       const countQuery = this.createCountQuery(params)
-
-      const compiledCount = countQuery.compile()
-      // console.log(compiledCount.sql, compiledCount.parameters)
 
       try {
         const [queryResult, countQueryResult] = await Promise.all([
@@ -365,6 +373,8 @@ export class KyselyAdapter<
 
         const data = filters.$limit === 0 ? [] : queryResult
         const total = Number(countQueryResult?.total) || 0
+
+        // console.log(data)
 
         return {
           total,
@@ -432,8 +442,6 @@ export class KyselyAdapter<
       ? q.execute()
       : q.executeTakeFirst())
 
-    console.log(response)
-
     if (dialectType !== 'mysql') {
       return response
     }
@@ -454,6 +462,7 @@ export class KyselyAdapter<
       ids.length === 1
         ? selected.where(idField, '=', ids[0])
         : selected.where(idField, 'in', ids)
+
     return isArray ? where.execute() : where.executeTakeFirst()
   }
 
@@ -478,9 +487,12 @@ export class KyselyAdapter<
     const isArray = Array.isArray(_data)
     const $select = applySelectId(filters.$select, idField)
 
-    const q = this.Model.insertInto(name).values(_data)
+    const q = this.Model.insertInto(name).values(this.convertValues(_data))
 
     const returning = this.applyReturning(q, $select)
+
+    // const compiled = returning.compile()
+    // console.log(compiled.sql, compiled.parameters)
 
     try {
       const response = await this.executeAndReturn(returning, {
@@ -488,8 +500,6 @@ export class KyselyAdapter<
         options,
         $select,
       })
-
-      console.log(response)
 
       return response
     } catch (error) {
@@ -517,8 +527,7 @@ export class KyselyAdapter<
       const result = {
         q: returning,
       }
-      const compiled = result.q.compile()
-      console.log(compiled.sql, compiled.parameters, id, params.query)
+
       return result
     }
 
@@ -530,7 +539,7 @@ export class KyselyAdapter<
         ...params,
         query: {
           ...params.query,
-          $select,
+          $select: $select || params.query?.$select,
         },
       }).catch((err) => {
         throw new NotFound(`No record found for ${idField} '${id}'`)
@@ -546,7 +555,7 @@ export class KyselyAdapter<
       ...params,
       query: {
         ...params.query,
-        $select,
+        $select: $select || params.query?.$select,
       },
       paginate: false,
     })
@@ -594,7 +603,6 @@ export class KyselyAdapter<
     _data: PatchData,
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Result | Result[]> {
-    console.log('id', id)
     if (id === null && !this.allowsMulti('patch', params)) {
       throw new MethodNotAllowed('Can not patch multiple entries')
     }
@@ -695,8 +703,13 @@ export class KyselyAdapter<
       return isMulti ? [] : Promise.reject(new NotFound())
     }
 
+    // const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
+
     try {
-      const result = maybeItems || (await q.execute())
+      const _result = await q.execute()
+
+      const result = maybeItems || _result
 
       if (isMulti) {
         return result as Result[]

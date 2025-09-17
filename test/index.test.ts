@@ -15,6 +15,7 @@ const testSuite = defineTestSuite({
     '.remove + NotFound (string)',
     '.update + NotFound (string)',
   ],
+  // only: ['.remove + $select'],
 })
 
 interface PeopleTable {
