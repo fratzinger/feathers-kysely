@@ -1,7 +1,7 @@
 {
   "name": "@fratzinger/feathers-kysely",
   "description": "Feathers SQL service adapter using Kysely",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "homepage": "https://github.com/fratzinger/feathers-kysely",
   "keywords": [
     "feathers",
