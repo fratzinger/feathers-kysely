@@ -99,7 +99,7 @@ function setup() {
     name: string
     age: number | null
     time: string
-    create: boolean
+    created: boolean
   }
 
   type Todo = {
