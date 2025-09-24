@@ -18,6 +18,7 @@ import { errorHandler } from './error-handler.js'
 import type { DialectType, KyselyAdapterParams } from './declarations.js'
 import {
   sql,
+  type SelectExpression,
   type ComparisonOperatorExpression,
   type DeleteQueryBuilder,
   type InsertQueryBuilder,
@@ -201,7 +202,7 @@ export class KyselyAdapter<
     params: ServiceParams,
     options?: {
       id?: NullableId
-      select?: boolean | string[]
+      select?: boolean | SelectExpression<any, any>[]
       where?: boolean
       limit?: boolean | number
       offset?: boolean | number
