@@ -11,6 +11,7 @@ export default defineConfig({
     globals: true,
     // projects: ['vitest'],
     includeSource: ['src/**/*.{js,ts}'],
+    include: ['test/**/special-operators.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

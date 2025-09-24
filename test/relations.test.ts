@@ -71,18 +71,16 @@ function setup() {
     Model: db,
     name: 'todos',
     multi: true,
-  })
-
-  // @ts-expect-error TODO: add to options
-  todos.queryMap = {
-    user: {
-      service: 'users',
-      keyHere: 'userId',
-      keyThere: 'id',
-      asArray: false,
-      db: 'users',
+    relations: {
+      user: {
+        service: 'users',
+        keyHere: 'userId',
+        keyThere: 'id',
+        asArray: false,
+        databaseTableName: 'users',
+      },
     },
-  }
+  })
 
   type User = {
     id: number
