@@ -292,7 +292,7 @@ export class KyselyAdapter<
 
       if (alreadyJoined.includes(mapKey)) continue
 
-      const tableName = map.db || map.service
+      const tableName = map.databaseTableName || map.service
       const keyHere = map.keyHere || 'id'
       const keyThere = map.keyThere || 'id'
 
