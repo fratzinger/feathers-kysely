@@ -1,25 +1,29 @@
-import type { Id, NullableId, Paginated, Query } from '@feathersjs/feathers'
+import type {
+  Id,
+  NullableId,
+  Paginated,
+  PaginationParams,
+  Query,
+} from '@feathersjs/feathers'
 import { _ } from '@feathersjs/commons'
 import type {
   PaginationOptions,
   AdapterQuery,
+  AdapterServiceOptions,
 } from '@feathersjs/adapter-commons'
 import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
 import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
-import type {
-  DialectType,
-  KyselyAdapterOptions,
-  KyselyAdapterParams,
-} from './declarations.js'
-import type {
-  ComparisonOperatorExpression,
-  DeleteQueryBuilder,
-  InsertQueryBuilder,
-  Kysely,
-  SelectQueryBuilder,
-  UpdateQueryBuilder,
+import type { DialectType, KyselyAdapterParams } from './declarations.js'
+import {
+  sql,
+  type ComparisonOperatorExpression,
+  type DeleteQueryBuilder,
+  type InsertQueryBuilder,
+  type Kysely,
+  type SelectQueryBuilder,
+  type UpdateQueryBuilder,
 } from 'kysely'
 import { applySelectId, convertBooleansToNumbers } from './utils.js'
 
@@ -29,25 +33,57 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $lte: '<=',
   $gt: '>',
   $gte: '>=',
-  $like: 'like',
-  $notlike: 'not like',
-  $ilike: 'ilike',
   $in: 'in',
   $nin: 'not in',
   $eq: '=',
   $ne: '!=',
+  $like: 'like',
+  $notLike: 'not like',
+  $iLike: 'ilike',
+  $contains: '@>',
+  $contained: '<@',
+  $overlap: '&&',
 }
+
+const FILTERS = ['$select', '$sort', '$limit', '$skip'] as const
+type Filter = (typeof FILTERS)[number]
 
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
   dialectType: DialectType
 }
 
+type Relation = {
+  service: string
+  keyHere: string
+  keyThere: string
+  asArray: boolean
+  databaseTableName?: string
+}
+
+export interface KyselyAdapterOptions extends AdapterServiceOptions {
+  Model: Kysely<any>
+  /**
+   * The table name
+   */
+  name: string
+  dialectType?: DialectType
+  // TODO
+  relations?: Record<string, Relation>
+}
+
+type FilterQueryResult = {
+  paginate: PaginationParams | undefined
+  filters: Filters
+  query: Query
+  options: KyselyAdapterOptionsDefined
+}
+
 type Filters = {
-  $select: string[] | undefined
-  $sort: Record<string, 1 | -1> | undefined
-  $limit: number | undefined
-  $skip: number | undefined
+  $select?: string[] | undefined
+  $sort?: Record<string, number> | undefined
+  $limit?: number | undefined
+  $skip?: number | undefined
 }
 
 export class KyselyAdapter<
@@ -82,7 +118,9 @@ export class KyselyAdapter<
         ...options.filters,
         $and: (value: any) => value,
       },
-      operators: [...(options.operators || []), '$like', '$notlike', '$ilike'],
+      operators: [
+        ...new Set([...(options.operators ?? []), ...Object.keys(OPERATORS)]),
+      ],
     })
 
     const dialectType = this.getDatabaseDialect(options.Model)
@@ -104,11 +142,6 @@ export class KyselyAdapter<
     return 'sqlite'
   }
 
-  // get fullName() {
-  //   const { name, schema } = this.getOptions({} as ServiceParams)
-  //   return schema ? `${schema}.${name}` : name
-  // }
-
   get Model() {
     return this.getModel()
   }
@@ -122,7 +155,7 @@ export class KyselyAdapter<
     return Model
   }
 
-  filterQuery(params: ServiceParams, id?: NullableId) {
+  filterQuery(params: ServiceParams, id?: NullableId): FilterQueryResult {
     const options = this.getOptions(params)
     const {
       $select: _select,
@@ -164,8 +197,53 @@ export class KyselyAdapter<
     }
   }
 
-  createQuery(filters: any, query: any) {
-    const q = this.startSelectQuery(filters, query)
+  composeQuery(
+    params: ServiceParams,
+    options?: {
+      id?: NullableId
+      select?: boolean | string[]
+      where?: boolean
+      limit?: boolean | number
+      offset?: boolean | number
+      order?: boolean
+    },
+  ) {
+    const { filters, query } = this.filterQuery(params, options?.id)
+
+    let q = this.Model.selectFrom(this.options.name)
+    q = this.applyInnerJoin(q, query)
+    if (options?.select) {
+      const select = Array.isArray(options.select)
+        ? options.select
+        : filters.$select
+      q = select ? q.select(select) : q.selectAll()
+    }
+
+    if (options?.where) {
+      q = this.applyWhere(q, query)
+    }
+
+    if (options?.limit) {
+      const limit =
+        typeof options.limit === 'number' ? options.limit : filters.$limit
+      q = limit ? q.limit(limit) : q
+    }
+
+    if (options?.offset) {
+      const skip =
+        typeof options.offset === 'number' ? options.offset : filters.$skip
+      q = skip ? q.offset(skip) : q
+    }
+
+    if (options?.order) {
+      q = this.applySort(q, filters)
+    }
+
+    return q
+  }
+
+  createQuery(query: any, filters: Filters) {
+    const q = this.startSelectQuery(query, filters)
     const qWhere = this.applyWhere(q, query)
     const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
     const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
@@ -173,10 +251,10 @@ export class KyselyAdapter<
     return qSorted
   }
 
-  startSelectQuery(filters: any, query: any) {
+  startSelectQuery(query: any, options?: { $select?: string[] | undefined }) {
     let q = this.Model.selectFrom(this.options.name)
     q = this.applyInnerJoin(q, query)
-    return filters.$select ? q.select(filters.$select) : q.selectAll()
+    return options?.$select ? q.select(options.$select) : q.selectAll()
   }
 
   createCountQuery(params: ServiceParams) {
@@ -197,8 +275,7 @@ export class KyselyAdapter<
     query: Query,
     alreadyJoined: string[] = [],
   ) {
-    // @ts-expect-error TODO: add it to options
-    if (!this.queryMap) return q
+    if (!this.options.relations) return q
 
     for (const key in query) {
       if (key === '$and' || key === '$or') {
@@ -210,13 +287,12 @@ export class KyselyAdapter<
 
       const mapKey = key.split('.')[0]
 
-      // @ts-expect-error TODO: add it to options
-      const map = this.queryMap[mapKey]
+      const map = this.options.relations[mapKey]
       if (!map) continue
 
       if (alreadyJoined.includes(mapKey)) continue
 
-      const tableName = map.db || map.service
+      const tableName = map.databaseTableName || map.service
       const keyHere = map.keyHere || 'id'
       const keyThere = map.keyThere || 'id'
 
@@ -230,7 +306,7 @@ export class KyselyAdapter<
     return q
   }
 
-  getOperator(op: string, value: any) {
+  private getOperator(op: string, value: any) {
     if (value !== null) {
       return OPERATORS[op]
     }
@@ -240,10 +316,42 @@ export class KyselyAdapter<
     return OPERATORS[op]
   }
 
+  private transformOperatorValue(op: string, value: any) {
+    if (op !== '$contains' && op !== '$contained' && op !== '$overlap') {
+      return value
+    }
+
+    if (!value) {
+      return value
+    }
+
+    if (!Array.isArray(value)) {
+      throw new BadRequest(`The value for '${op}' must be an array`)
+    }
+
+    // For PostgreSQL, we need to help with type inference
+    // Cast based on the first element's type
+    const firstElement = value[0]
+    if (typeof firstElement === 'number') {
+      return sql`ARRAY[${sql.join(value)}]::integer[]`
+    } else if (typeof firstElement === 'string') {
+      return sql`${JSON.stringify(value)}`
+      //return sql`ARRAY[${sql.join(value)}]::varchar[]`
+    } else {
+      // Default case - let PostgreSQL try to infer
+      return sql`ARRAY[${sql.join(value)}]`
+    }
+  }
+
   applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
     return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
-      if (['$and', '$or'].includes(queryKey)) {
+      // ignore filters - just for safety
+      if (FILTERS.includes(queryKey as Filter)) {
+        return q
+      }
+
+      if (queryKey === '$and' || queryKey === '$or') {
         return q.where((qb: any) => {
           return this.handleAndOr(qb, queryKey, queryProperty)
         })
@@ -253,7 +361,11 @@ export class KyselyAdapter<
           const value = queryProperty[operator]
           const op = this.getOperator(operator, value)
           if (!op) continue
-          q = q.where(queryKey, op, value)
+          q = q.where(
+            queryKey,
+            op,
+            this.transformOperatorValue(operator, value),
+          )
         }
 
         return q
@@ -265,18 +377,18 @@ export class KyselyAdapter<
     }, q)
   }
 
-  handleAndOr(qb: any, key: string, value: Query[]) {
-    const method = qb[key.replace('$', '')]
+  private handleAndOr(qb: any, key: '$and' | '$or', value: Query[]) {
+    const method = qb[key === '$and' ? 'and' : 'or']
     const subs = value.map((subParams: Query) => {
       return this.handleSubQuery(qb, subParams)
     })
     return method(subs)
   }
 
-  handleSubQuery(qb: any, query: Query): any {
+  private handleSubQuery(qb: any, query: Query): any {
     return qb.and(
       Object.entries(query).map(([key, value]) => {
-        if (['$and', '$or'].includes(key)) {
+        if (key === '$and' || key === '$or') {
           return this.handleAndOr(qb, key, value)
         } else if (_.isObject(value)) {
           // loop through OPERATORS and apply them
@@ -298,7 +410,7 @@ export class KyselyAdapter<
     )
   }
 
-  whereCompare(qb: any, key: string, operator: any, value: any) {
+  private whereCompare(qb: any, key: string, operator: any, value: any) {
     return qb.eb(key, this.getOperator(operator, value), value)
   }
 
@@ -355,7 +467,7 @@ export class KyselyAdapter<
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Paginated<Result> | Result[]> {
     const { filters, query, paginate } = this.filterQuery(params)
-    const q = this.createQuery(filters, query)
+    const q = this.createQuery(query, filters)
 
     // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
@@ -376,7 +488,7 @@ export class KyselyAdapter<
 
         return {
           total,
-          limit: filters.$limit,
+          limit: filters.$limit!,
           skip: filters.$skip || 0,
           data: data as Result[],
         }
@@ -406,10 +518,11 @@ export class KyselyAdapter<
     const { filters, query, options } = this.filterQuery(params, id)
     const { id: idField } = options
 
-    const q = this.startSelectQuery(filters, query)
+    const q = this.startSelectQuery(query, filters)
     const qWhere = this.applyWhere(q, query)
+    const qLimit = qWhere.limit(1)
     try {
-      const item = await qWhere.executeTakeFirst()
+      const item = await qLimit.executeTakeFirst()
 
       if (!item) throw new NotFound(`No record found for ${idField} '${id}'`)
 
