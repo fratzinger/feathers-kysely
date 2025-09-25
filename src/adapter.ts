@@ -16,15 +16,16 @@ import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
 import type { DialectType, KyselyAdapterParams } from './declarations.js'
-import {
-  sql,
-  type SelectExpression,
-  type ComparisonOperatorExpression,
-  type DeleteQueryBuilder,
-  type InsertQueryBuilder,
-  type Kysely,
-  type SelectQueryBuilder,
-  type UpdateQueryBuilder,
+import { sql } from 'kysely'
+import type {
+  SelectExpression,
+  ComparisonOperatorExpression,
+  DeleteQueryBuilder,
+  InsertQueryBuilder,
+  Kysely,
+  SelectQueryBuilder,
+  UpdateQueryBuilder,
+  ExpressionBuilder,
 } from 'kysely'
 import { applySelectId, convertBooleansToNumbers } from './utils.js'
 
@@ -73,6 +74,8 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
   dialectType?: DialectType
   // TODO
   relations?: Record<string, Relation>
+  // TODO
+  properties?: Record<string, any>
 }
 
 type FilterQueryResult = {
@@ -103,6 +106,8 @@ export class KyselyAdapter<
 > {
   declare options: KyselyAdapterOptionsDefined
 
+  private propertyMap: Map<string, any>
+
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
       throw new Error(
@@ -129,6 +134,9 @@ export class KyselyAdapter<
     const dialectType = this.getDatabaseDialect(options.Model)
 
     this.options.dialectType ??= dialectType
+    this.propertyMap = new Map<string, any>(
+      Object.entries(options.properties || {}),
+    )
   }
 
   private getDatabaseDialect(db?: Kysely<any>): DialectType {
@@ -216,9 +224,13 @@ export class KyselyAdapter<
     let q = this.Model.selectFrom(this.options.name)
     q = this.applyInnerJoin(q, query)
     if (options?.select) {
-      const select = Array.isArray(options.select)
+      const $select = Array.isArray(options.select)
         ? options.select
         : filters.$select
+
+      const select =
+        $select && Array.isArray($select) ? $select.map(this.col) : $select
+
       q = select ? q.select(select) : q.selectAll()
     }
 
@@ -345,7 +357,17 @@ export class KyselyAdapter<
     }
   }
 
-  applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
+  private col<
+    T extends string | ExpressionBuilder<any, any> | SelectExpression<any, any>,
+  >(column: T): T {
+    if (typeof column !== 'string') return column
+    console.log(this.propertyMap)
+    return this.propertyMap.has(column)
+      ? (`${this.options.name}.${column}` as T)
+      : column
+  }
+
+  applyWhere<Q extends SelectQueryBuilder<any, any, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
     return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
       // ignore filters - just for safety
@@ -364,7 +386,7 @@ export class KyselyAdapter<
           const op = this.getOperator(operator, value)
           if (!op) continue
           q = q.where(
-            queryKey,
+            this.col(queryKey),
             op,
             this.transformOperatorValue(operator, value),
           )
@@ -374,7 +396,7 @@ export class KyselyAdapter<
       } else {
         const op = this.getOperator('$eq', queryProperty)
         if (!op) return q
-        return q.where(queryKey, op, queryProperty)
+        return q.where(this.col(queryKey), op, queryProperty)
       }
     }, q)
   }
@@ -413,7 +435,7 @@ export class KyselyAdapter<
   }
 
   private whereCompare(qb: any, key: string, operator: any, value: any) {
-    return qb.eb(key, this.getOperator(operator, value), value)
+    return qb.eb(this.col(key), this.getOperator(operator, value), value)
   }
 
   applySort<Q extends SelectQueryBuilder<any, string, any>>(
@@ -557,11 +579,13 @@ export class KyselyAdapter<
       (isArray ? [...Array(count).keys()].map((i) => id + i) : [id])
 
     const from = this.Model.selectFrom(name)
-    const selected = $select ? from.select($select) : from.selectAll()
+    const select =
+      $select && Array.isArray($select) ? $select.map(this.col) : $select
+    const selected = select ? from.select(select) : from.selectAll()
     const where =
       ids.length === 1
-        ? selected.where(idField, '=', ids[0])
-        : selected.where(idField, 'in', ids)
+        ? selected.where(this.col(idField), '=', ids[0])
+        : selected.where(this.col(idField), 'in', ids)
 
     return isArray
       ? where.execute().catch(errorHandler)
@@ -646,7 +670,7 @@ export class KyselyAdapter<
         throw new NotFound(`No record found for ${idField} '${id}'`)
       })
 
-      const withWhere = (q as any).where(idField, '=', id)
+      const withWhere = (q as any).where(this.col(idField), '=', id)
       const returning = this.applyReturning(withWhere, filters.$select)
 
       return { q: returning as Q, ids: [id], items: [result] }
@@ -669,8 +693,8 @@ export class KyselyAdapter<
 
     const withWhere =
       ids.length === 1
-        ? (q as any).where(idField, '=', ids[0])
-        : (q as any).where(idField, 'in', ids)
+        ? (q as any).where(this.col(idField), '=', ids[0])
+        : (q as any).where(this.col(idField), 'in', ids)
 
     const returning = this.applyReturning(withWhere, filters.$select)
 

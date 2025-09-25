@@ -30,9 +30,9 @@ function setup() {
 
   const db = new Kysely<DB>({
     dialect: dialect(),
-    //   log(event) {
-    //     console.log(event.query.sql)
-    //   }
+    log(event) {
+      console.log(event.query.sql)
+    },
   })
 
   const clean = async () => {
@@ -65,12 +65,22 @@ function setup() {
     Model: db,
     name: 'users',
     multi: true,
+    properties: {
+      name: true,
+      age: true,
+      time: true,
+      created: true,
+    },
   })
 
   const todos = new KyselyService<Todo>({
     Model: db,
     name: 'todos',
     multi: true,
+    properties: {
+      text: true,
+      userId: true,
+    },
     relations: {
       user: {
         service: 'users',
