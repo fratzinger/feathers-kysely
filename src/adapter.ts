@@ -446,7 +446,7 @@ export class KyselyAdapter<
   ) {
     return Object.entries(filters.$sort || {}).reduce(
       (q, [key, value]) => {
-        return q.orderBy(key, value === 1 ? 'asc' : 'desc')
+        return q.orderBy(this.col(key), value === 1 ? 'asc' : 'desc')
       },
       q as SelectQueryBuilder<any, string, any>,
     )
