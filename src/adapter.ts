@@ -291,16 +291,15 @@ export class KyselyAdapter<
       const mapKey = key.split('.')[0]
 
       const map = this.options.relations[mapKey]
-      if (!map) continue
+      if (!map || !map.databaseTableName || !map.keyHere || !map.keyThere)
+        continue
 
       if (alreadyJoined.includes(mapKey)) continue
 
-      const tableName = map.databaseTableName || map.service
-      const keyHere = map.keyHere || 'id'
-      const keyThere = map.keyThere || 'id'
+      const { databaseTableName, keyHere, keyThere } = map
 
       q = q.innerJoin(
-        `${tableName} as ${mapKey}`,
+        `${databaseTableName} as ${mapKey}`,
         `${mapKey}.${keyThere}`,
         `${this.options.name}.${keyHere}`,
       )
