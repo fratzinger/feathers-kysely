@@ -46,6 +46,8 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $overlap: '&&',
 }
 
+// TODO: $between, $notBetween
+
 const FILTERS = ['$select', '$sort', '$limit', '$skip'] as const
 type Filter = (typeof FILTERS)[number]
 
@@ -476,36 +478,27 @@ export class KyselyAdapter<
     if (paginate && paginate.default) {
       const countQuery = this.createCountQuery(params)
 
-      try {
-        const [queryResult, countQueryResult] = await Promise.all([
-          filters.$limit !== 0 ? q.execute() : undefined,
-          countQuery.executeTakeFirst(),
-        ])
+      const [queryResult, countQueryResult] = await Promise.all([
+        filters.$limit !== 0 ? q.execute().catch(errorHandler) : undefined,
+        countQuery.executeTakeFirst().catch(errorHandler),
+      ])
 
-        const data = filters.$limit === 0 ? [] : queryResult
-        const total = Number(countQueryResult?.total) || 0
+      const data = filters.$limit === 0 ? [] : queryResult
+      const total = Number(countQueryResult?.total) || 0
 
-        // console.log(data)
+      // console.log(data)
 
-        return {
-          total,
-          limit: filters.$limit!,
-          skip: filters.$skip || 0,
-          data: data as Result[],
-        }
-      } catch (error) {
-        errorHandler(error)
-        throw error
+      return {
+        total,
+        limit: filters.$limit!,
+        skip: filters.$skip || 0,
+        data: data as Result[],
       }
     }
 
-    try {
-      const data = filters.$limit === 0 ? [] : await q.execute()
-      return data as Result[]
-    } catch (error) {
-      errorHandler(error)
-      throw error
-    }
+    const data =
+      filters.$limit === 0 ? [] : await q.execute().catch(errorHandler)
+    return data as Result[]
   }
 
   /**
@@ -522,16 +515,12 @@ export class KyselyAdapter<
     const q = this.startSelectQuery(query, filters)
     const qWhere = this.applyWhere(q, query)
     const qLimit = qWhere.limit(1)
-    try {
-      const item = await qLimit.executeTakeFirst()
 
-      if (!item) throw new NotFound(`No record found for ${idField} '${id}'`)
+    const item = await qLimit.executeTakeFirst().catch(errorHandler)
 
-      return item as Result
-    } catch (error) {
-      errorHandler(error)
-      throw error
-    }
+    if (!item) throw new NotFound(`No record found for ${idField} '${id}'`)
+
+    return item as Result
   }
 
   private async executeAndReturn<
@@ -551,8 +540,8 @@ export class KyselyAdapter<
     const { id: idField, name, dialectType } = options
 
     const response = await (isArray && dialectType !== 'mysql'
-      ? q.execute()
-      : q.executeTakeFirst())
+      ? q.execute().catch(errorHandler)
+      : q.executeTakeFirst().catch(errorHandler))
 
     if (dialectType !== 'mysql') {
       return response
@@ -575,7 +564,9 @@ export class KyselyAdapter<
         ? selected.where(idField, '=', ids[0])
         : selected.where(idField, 'in', ids)
 
-    return isArray ? where.execute() : where.executeTakeFirst()
+    return isArray
+      ? where.execute().catch(errorHandler)
+      : where.executeTakeFirst().catch(errorHandler)
   }
 
   /**
@@ -608,18 +599,13 @@ export class KyselyAdapter<
     // const compiled = returning.compile()
     // console.log(compiled.sql, compiled.parameters)
 
-    try {
-      const response = await this.executeAndReturn(returning, {
-        isArray,
-        options,
-        $select,
-      })
+    const response = await this.executeAndReturn(returning, {
+      isArray,
+      options,
+      $select,
+    })
 
-      return response
-    } catch (error) {
-      errorHandler(error)
-      throw error
-    }
+    return response
   }
 
   private async getWhereForUpdateOrDelete<
@@ -746,23 +732,18 @@ export class KyselyAdapter<
     // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
 
-    try {
-      const response = await this.executeAndReturn(q, {
-        isArray: asMulti,
-        options,
-        $select: filters.$select,
-        ids,
-      })
+    const response = await this.executeAndReturn(q, {
+      isArray: asMulti,
+      options,
+      $select: filters.$select,
+      ids,
+    })
 
-      if (!asMulti && !response) {
-        throw new NotFound(`No record found for ${idField} '${id}'`)
-      }
-
-      return response as Result | Result[]
-    } catch (error) {
-      errorHandler(error)
-      throw error
+    if (!asMulti && !response) {
+      throw new NotFound(`No record found for ${idField} '${id}'`)
     }
+
+    return response as Result | Result[]
   }
 
   async _update(
@@ -834,21 +815,16 @@ export class KyselyAdapter<
     // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
 
-    try {
-      const _result = await q.execute()
+    const _result = await q.execute().catch(errorHandler)
 
-      const result = maybeItems || _result
+    const result = maybeItems || _result
 
-      if (isMulti) {
-        return result as Result[]
-      }
-
-      if (result.length === 0) throw new NotFound()
-
-      return result[0] as Result
-    } catch (error) {
-      errorHandler(error)
-      throw error
+    if (isMulti) {
+      return result as Result[]
     }
+
+    if (result.length === 0) throw new NotFound()
+
+    return result[0] as Result
   }
 }
