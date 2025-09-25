@@ -25,7 +25,6 @@ import type {
   Kysely,
   SelectQueryBuilder,
   UpdateQueryBuilder,
-  ExpressionBuilder,
 } from 'kysely'
 import { applySelectId, convertBooleansToNumbers } from './utils.js'
 
@@ -357,9 +356,7 @@ export class KyselyAdapter<
     }
   }
 
-  private col<
-    T extends string | ExpressionBuilder<any, any> | SelectExpression<any, any>,
-  >(column: T): T {
+  private col<T>(column: T): T {
     if (typeof column !== 'string') return column
     console.log(this.propertyMap)
     return this.propertyMap.has(column)
@@ -367,7 +364,7 @@ export class KyselyAdapter<
       : column
   }
 
-  applyWhere<Q extends SelectQueryBuilder<any, any, any>>(q: Q, query: Query) {
+  applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
     return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
       // ignore filters - just for safety
