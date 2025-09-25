@@ -228,7 +228,7 @@ export class KyselyAdapter<
         : filters.$select
 
       const select =
-        $select && Array.isArray($select) ? $select.map(this.col) : $select
+        $select && Array.isArray($select) ? this.col($select) : $select
 
       q = select ? q.select(select) : q.selectAll()
     }
@@ -357,8 +357,8 @@ export class KyselyAdapter<
   }
 
   private col<T>(column: T): T {
+    if (Array.isArray(column)) return column.map((item) => this.col(item)) as T
     if (typeof column !== 'string') return column
-    console.log(this.propertyMap)
     return this.propertyMap.has(column)
       ? (`${this.options.name}.${column}` as T)
       : column
@@ -366,14 +366,17 @@ export class KyselyAdapter<
 
   applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
-    return Object.entries(query).reduce((q, [queryKey, queryProperty]) => {
+
+    for (const queryKey in query) {
+      const queryProperty = query[queryKey]
+
       // ignore filters - just for safety
       if (FILTERS.includes(queryKey as Filter)) {
-        return q
+        continue
       }
 
       if (queryKey === '$and' || queryKey === '$or') {
-        return q.where((qb: any) => {
+        q = q.where((qb: any) => {
           return this.handleAndOr(qb, queryKey, queryProperty)
         })
       } else if (_.isObject(queryProperty)) {
@@ -388,14 +391,14 @@ export class KyselyAdapter<
             this.transformOperatorValue(operator, value),
           )
         }
-
-        return q
       } else {
         const op = this.getOperator('$eq', queryProperty)
-        if (!op) return q
-        return q.where(this.col(queryKey), op, queryProperty)
+        if (!op) continue
+        q = q.where(this.col(queryKey), op, queryProperty)
       }
-    }, q)
+    }
+
+    return q
   }
 
   private handleAndOr(qb: any, key: '$and' | '$or', value: Query[]) {
@@ -577,7 +580,7 @@ export class KyselyAdapter<
 
     const from = this.Model.selectFrom(name)
     const select =
-      $select && Array.isArray($select) ? $select.map(this.col) : $select
+      $select && Array.isArray($select) ? this.col($select) : $select
     const selected = select ? from.select(select) : from.selectAll()
     const where =
       ids.length === 1
