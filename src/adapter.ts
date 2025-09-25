@@ -277,7 +277,9 @@ export class KyselyAdapter<
     const { name, id: idField } = this.options
     const q = this.Model.selectFrom(name)
     const joined = this.applyInnerJoin(q, query)
-    const selected = joined.select(this.Model.fn.count(idField).as('total'))
+    const selected = joined.select(
+      this.Model.fn.count(this.col(idField)).as('total'),
+    )
 
     const qWhere = this.applyWhere(selected, query)
 
@@ -463,7 +465,7 @@ export class KyselyAdapter<
   >(q: Q, $select: string[] | undefined): Q {
     return this.options.dialectType !== 'mysql'
       ? $select
-        ? (q as any).returning($select)
+        ? (q as any).returning($select.map((item) => this.col(item)))
         : (q as any).returningAll()
       : q
   }
