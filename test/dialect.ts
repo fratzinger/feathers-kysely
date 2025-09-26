@@ -27,7 +27,6 @@ export default (): Dialect => {
   }
 
   if (DB === 'postgres') {
-    console.log('Using Postgres')
     const config: PoolConfig = {
       host: 'localhost',
       user: process.env.POSTGRES_USER ?? 'postgres',
@@ -46,8 +45,6 @@ export default (): Dialect => {
       pool: new Pool(config),
     })
   } else if (DB === 'mysql') {
-    console.log('Using MySQL')
-
     const config: PoolOptions = {
       database: process.env.MYSQL_DATABASE ?? 'test',
       host: process.env.MYSQL_HOST ?? 'localhost',
@@ -62,7 +59,6 @@ export default (): Dialect => {
       pool: createPool(config) as any,
     })
   } else {
-    console.log('Using SQLite')
     createdDialects[DB] = new SqliteDialect({
       database: new Database(':memory:'),
     })

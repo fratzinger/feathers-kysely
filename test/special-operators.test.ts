@@ -32,9 +32,9 @@ function json<T>(value: T): RawBuilder<T> {
 function setup() {
   const db = new Kysely<DB>({
     dialect: dialect(),
-    log(event) {
-      console.log(event.query.sql, event.query.parameters)
-    },
+    // log(event) {
+    //   console.log(event.query.sql, event.query.parameters)
+    // },
   })
 
   const clean = async () => {

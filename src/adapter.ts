@@ -3,6 +3,7 @@ import type {
   NullableId,
   Paginated,
   PaginationParams,
+  Params,
   Query,
 } from '@feathersjs/feathers'
 import { _ } from '@feathersjs/commons'
@@ -26,7 +27,12 @@ import type {
   SelectQueryBuilder,
   UpdateQueryBuilder,
 } from 'kysely'
-import { applySelectId, convertBooleansToNumbers } from './utils.js'
+import {
+  applySelectId,
+  convertBooleansToNumbers,
+  getOrderByModifier,
+} from './utils.js'
+import { addToQuery } from 'feathers-utils'
 
 // See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
 const OPERATORS: Record<string, ComparisonOperatorExpression> = {
@@ -81,12 +87,25 @@ type FilterQueryResult = {
   paginate: PaginationParams | undefined
   filters: Filters
   query: Query
+  params: Params
   options: KyselyAdapterOptionsDefined
 }
 
+type SortFilter = Record<
+  string,
+  | 1
+  | -1
+  | 'asc'
+  | 'desc'
+  | 'asc nulls first'
+  | 'asc nulls last'
+  | 'desc nulls first'
+  | 'desc nulls last'
+>
+
 type Filters = {
   $select?: string[] | undefined
-  $sort?: Record<string, number> | undefined
+  $sort?: SortFilter | undefined
   $limit?: number | undefined
   $skip?: number | undefined
 }
@@ -167,6 +186,14 @@ export class KyselyAdapter<
 
   filterQuery(params: ServiceParams, id?: NullableId): FilterQueryResult {
     const options = this.getOptions(params)
+
+    params =
+      id == null
+        ? params
+        : { ...params, query: addToQuery(params.query, options.id, id) }
+
+    params = { ...params, query: this.convertValues(params.query) }
+
     const {
       $select: _select,
       $sort,
@@ -183,15 +210,6 @@ export class KyselyAdapter<
             : undefined))
       : getLimit(_limit, options.paginate)
 
-    const queryWithId =
-      id == null || query[options.id] === id
-        ? query
-        : !(options.id in query)
-          ? { ...query, [options.id]: id }
-          : { ...query, $and: [...(query.$and || []), { [options.id]: id }] }
-
-    const converted = this.convertValues(queryWithId)
-
     const $select = applySelectId(_select, options.id)
 
     return {
@@ -202,8 +220,9 @@ export class KyselyAdapter<
         $limit,
         $skip,
       },
-      query: converted,
+      query,
       options,
+      params,
     }
   }
 
@@ -218,10 +237,18 @@ export class KyselyAdapter<
       order?: boolean
     },
   ) {
-    const { filters, query } = this.filterQuery(params, options?.id)
+    const filterQueryResult = this.filterQuery(params, options?.id)
+    const filters = filterQueryResult.filters
+    let query = filterQueryResult.query
 
     let q = this.Model.selectFrom(this.options.name)
-    q = this.applyInnerJoin(q, query)
+    const applyResult = this.applyJoins(q, filterQueryResult.params, {
+      where: options?.where,
+      order: options?.order,
+    })
+    q = applyResult.q
+    query = applyResult.query
+
     if (options?.select) {
       const $select = Array.isArray(options.select)
         ? options.select
@@ -256,46 +283,79 @@ export class KyselyAdapter<
     return q
   }
 
-  createQuery(query: any, filters: Filters) {
-    const q = this.startSelectQuery(query, filters)
-    const qWhere = this.applyWhere(q, query)
-    const qLimit = filters.$limit ? qWhere.limit(filters.$limit) : qWhere
-    const qSkip = filters.$skip ? qLimit.offset(filters.$skip) : qLimit
-    const qSorted = this.applySort(qSkip, filters)
-    return qSorted
+  applyJoins<Q extends Record<string, any>>(
+    q: Q,
+    params: Params,
+    options: {
+      where?: boolean
+      order?: boolean
+    },
+  ): { q: Q; query: Query } {
+    let query = params.query || {}
+    if (!this.options.relations) return { q, query }
+
+    const alreadyJoined: string[] = []
+
+    if (options.where) {
+      const whereResult = this.applyJoinsForWhere(q, params.query || {}, {
+        alreadyJoined,
+      })
+      q = whereResult.q
+      query = whereResult.query
+    }
+
+    if (options.order && query.$sort) {
+      q = this.applyJoinsForOrderBy(q, query.$sort, { alreadyJoined })
+    }
+
+    return { q, query }
   }
 
-  startSelectQuery(query: any, options?: { $select?: string[] | undefined }) {
-    let q = this.Model.selectFrom(this.options.name)
-    q = this.applyInnerJoin(q, query)
-    return options?.$select ? q.select(options.$select) : q.selectAll()
-  }
-
-  createCountQuery(params: ServiceParams) {
-    const { query } = this.filterQuery(params)
-
-    const { name, id: idField } = this.options
-    const q = this.Model.selectFrom(name)
-    const joined = this.applyInnerJoin(q, query)
-    const selected = joined.select(
-      this.Model.fn.count(this.col(idField)).as('total'),
-    )
-
-    const qWhere = this.applyWhere(selected, query)
-
-    return qWhere
-  }
-
-  applyInnerJoin<Q extends Record<string, any>>(
+  private applyJoinsForWhere<Q extends Record<string, any>>(
     q: Q,
     query: Query,
-    alreadyJoined: string[] = [],
-  ) {
-    if (!this.options.relations) return q
+    options: {
+      alreadyJoined: string[]
+    },
+  ): { q: Q; query: Query } {
+    if (!this.options.relations) return { q, query }
+
+    const cloned = false
 
     for (const key in query) {
-      if (key === '$and' || key === '$or') {
-        q = this.applyInnerJoin(q, query[key], alreadyJoined)
+      if (FILTERS.includes(key as Filter)) continue
+
+      if ((key === '$and' || key === '$or') && Array.isArray(query[key])) {
+        let array = query[key]
+        let clonedArray = false
+        for (let i = 0; i < array.length; i++) {
+          const subQuery = array[i]
+          const { q: subQ, query: modifiedSubQuery } = this.applyJoinsForWhere(
+            q,
+            subQuery,
+            options,
+          )
+
+          q = subQ
+
+          if (subQuery !== modifiedSubQuery) {
+            if (!clonedArray) {
+              array = [...array]
+              clonedArray = true
+            }
+
+            array[i] = modifiedSubQuery
+          }
+        }
+
+        if (query[key] !== array) {
+          if (!cloned) {
+            query = { ...query }
+          }
+
+          query[key] = array
+        }
+
         continue
       }
 
@@ -307,15 +367,55 @@ export class KyselyAdapter<
       if (!map || !map.databaseTableName || !map.keyHere || !map.keyThere)
         continue
 
-      if (alreadyJoined.includes(mapKey)) continue
+      if (options.alreadyJoined.includes(mapKey)) continue
 
       const { databaseTableName, keyHere, keyThere } = map
 
-      q = q.innerJoin(
+      q = q.leftJoin(
         `${databaseTableName} as ${mapKey}`,
         `${mapKey}.${keyThere}`,
         `${this.options.name}.${keyHere}`,
       )
+
+      query = addToQuery(query, `${mapKey}.${keyThere}`, { $ne: null })
+
+      options.alreadyJoined.push(mapKey)
+    }
+
+    return { q, query }
+  }
+
+  private applyJoinsForOrderBy<Q extends Record<string, any>>(
+    q: Q,
+    $sort: SortFilter,
+    options: {
+      alreadyJoined: string[]
+    },
+  ): Q {
+    if (!this.options.relations || !$sort) return q
+
+    if (!$sort) return q
+
+    for (const key in $sort) {
+      if (!key.includes('.')) continue
+
+      const mapKey = key.split('.')[0]
+
+      const map = this.options.relations[mapKey]
+      if (!map || !map.databaseTableName || !map.keyHere || !map.keyThere)
+        continue
+
+      if (options.alreadyJoined.includes(mapKey)) continue
+
+      const { databaseTableName, keyHere, keyThere } = map
+
+      q = q.leftJoin(
+        `${databaseTableName} as ${mapKey}`,
+        `${mapKey}.${keyThere}`,
+        `${this.options.name}.${keyHere}`,
+      )
+
+      options.alreadyJoined.push(mapKey)
     }
 
     return q
@@ -442,14 +542,16 @@ export class KyselyAdapter<
 
   applySort<Q extends SelectQueryBuilder<any, string, any>>(
     q: Q,
-    filters: any,
+    filters: Filters,
   ) {
-    return Object.entries(filters.$sort || {}).reduce(
-      (q, [key, value]) => {
-        return q.orderBy(this.col(key), value === 1 ? 'asc' : 'desc')
-      },
-      q as SelectQueryBuilder<any, string, any>,
-    )
+    if (!filters.$sort) return q
+
+    for (const key in filters.$sort) {
+      const value = filters.$sort[key]
+      q = q.orderBy(this.col(key), getOrderByModifier(value)) as any
+    }
+
+    return q
   }
 
   /**
@@ -492,14 +594,23 @@ export class KyselyAdapter<
   async _find(
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Paginated<Result> | Result[]> {
-    const { filters, query, paginate } = this.filterQuery(params)
-    const q = this.createQuery(query, filters)
+    const { filters, paginate } = this.filterQuery(params)
+    const q = this.composeQuery(params, {
+      select: true,
+      where: true,
+      limit: true,
+      offset: true,
+      order: true,
+    })
 
     // const compiled = q.compile()
     // console.log(compiled.sql, compiled.parameters)
 
     if (paginate && paginate.default) {
-      const countQuery = this.createCountQuery(params)
+      const countQuery = this.composeQuery(params, {
+        select: [this.Model.fn.count(this.col(this.options.id)).as('total')],
+        where: true,
+      })
 
       const [queryResult, countQueryResult] = await Promise.all([
         filters.$limit !== 0 ? q.execute().catch(errorHandler) : undefined,
@@ -507,7 +618,7 @@ export class KyselyAdapter<
       ])
 
       const data = filters.$limit === 0 ? [] : queryResult
-      const total = Number(countQueryResult?.total) || 0
+      const total = Number((countQueryResult as any)?.total ?? 0) || 0
 
       // console.log(data)
 
@@ -532,16 +643,20 @@ export class KyselyAdapter<
     id: Id,
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Result> {
-    const { filters, query, options } = this.filterQuery(params, id)
-    const { id: idField } = options
+    const q = this.composeQuery(params, {
+      id,
+      select: true,
+      limit: 1,
+      where: true,
+    })
 
-    const q = this.startSelectQuery(query, filters)
-    const qWhere = this.applyWhere(q, query)
-    const qLimit = qWhere.limit(1)
+    // const compiled = q.compile()
+    // console.log(compiled.sql, compiled.parameters)
 
-    const item = await qLimit.executeTakeFirst().catch(errorHandler)
+    const item = await q.executeTakeFirst().catch(errorHandler)
 
-    if (!item) throw new NotFound(`No record found for ${idField} '${id}'`)
+    if (!item)
+      throw new NotFound(`No record found for ${this.options.id} '${id}'`)
 
     return item as Result
   }

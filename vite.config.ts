@@ -19,5 +19,6 @@ export default defineConfig({
     },
     fileParallelism: false,
     env: process.env,
+    // reporters: ['dot'],
   },
 })
