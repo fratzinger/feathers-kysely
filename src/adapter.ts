@@ -432,7 +432,7 @@ export class KyselyAdapter<
 
     const whereRef = eb
       .selectFrom(`${map.databaseTableName} as ${mapKey}`)
-      .select(sql`1`)
+      .select(sql`1` as any)
       .where((eb) =>
         eb.and([
           eb(`${mapKey}.${map.keyThere}`, '=', eb.ref(this.col(map.keyHere))),
@@ -579,7 +579,9 @@ export class KyselyAdapter<
 
     const result = this.handleQuery(eb, query)
 
-    return result?.length ? q.where((eb) => eb.and(result)) : q
+    return result?.length
+      ? q.where((eb: ExpressionBuilder<any, any>) => eb.and(result))
+      : q
   }
 
   handleQueryProperty(
