@@ -191,7 +191,7 @@ export class KyselyAdapter<
     params =
       id == null
         ? params
-        : { ...params, query: addToQuery(params.query, options.id, id) }
+        : { ...params, query: addToQuery(params.query, { [options.id]: id }) }
 
     params = { ...params, query: this.convertValues(params.query) }
 
