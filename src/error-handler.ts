@@ -10,7 +10,10 @@ import {
 
 export const ERROR = Symbol.for('feathers-kysely/error')
 
-export function errorHandler(error: any) {
+/**
+ * Convert a database error into a Feathers error.
+ */
+export function errorHandler(error: any): never {
   const { message } = error
   let feathersError = error
 

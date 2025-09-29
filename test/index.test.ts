@@ -15,7 +15,7 @@ const testSuite = defineTestSuite({
     '.remove + NotFound (string)',
     '.update + NotFound (string)',
   ],
-  // only: ['.remove + $select'],
+  // only: ['.get + NotFound (integer)'],
 })
 
 interface PeopleTable {
@@ -128,6 +128,7 @@ function setup() {
     Model: db,
     name: 'people',
     events: ['testing'],
+    multi: true,
   })
 
   const peopleId = new KyselyService<Person>({
@@ -135,12 +136,14 @@ function setup() {
     id: 'customid',
     name: 'people-customid',
     events: ['testing'],
+    multi: true,
   })
 
   const users = new KyselyService<Person>({
     Model: db,
     name: 'users',
     events: ['testing'],
+    multi: true,
   })
 
   const todos = new TodoService({
@@ -175,4 +178,61 @@ describe('Feathers Kysely Service', () => {
   testSuite({ app, serviceName: 'users', idProp: 'id' })
   testSuite({ app, serviceName: 'people', idProp: 'id' })
   testSuite({ app, serviceName: 'people-customid', idProp: 'customid' })
+
+  describe('specific', () => {
+    beforeAll(clean)
+
+    it.skip('sort with nulls first / last', async () => {
+      await app.service('people').create([
+        { name: 'Alice', age: 30, created: true },
+        { name: 'Bob', age: null, created: false },
+        { name: 'Charlie', age: 25, created: true },
+        { name: 'David', age: null, created: false },
+      ])
+
+      const result1 = await app.service('people').find({
+        query: {
+          $sort: { age: 'asc nulls last' },
+        },
+        paginate: false,
+      })
+      // console.log(result1)
+      // Expect Bob and David (null ages) to be last
+      expect(result1[0].name).toBe('Charlie')
+      expect(result1[1].name).toBe('Alice')
+
+      const result2 = await app.service('people').find({
+        query: {
+          $sort: { age: 'asc nulls first' },
+        },
+        paginate: false,
+      })
+      // console.log(result2.data)
+      // Expect Bob and David (null ages) to be first
+      expect(result2[2].name).toBe('Charlie')
+      expect(result2[3].name).toBe('Alice')
+
+      const result3 = await app.service('people').find({
+        query: {
+          $sort: { age: 'desc nulls last' },
+        },
+        paginate: false,
+      })
+      // console.log(result3.data)
+      // Expect Bob and David (null ages) to be last
+      expect(result3[0].name).toBe('Alice')
+      expect(result3[1].name).toBe('Charlie')
+
+      const result4 = await app.service('people').find({
+        query: {
+          $sort: { age: 'desc nulls first' },
+        },
+        paginate: false,
+      })
+      // console.log(result4.data)
+      // Expect Bob and David (null ages) to be first
+      expect(result4[2].name).toBe('Alice')
+      expect(result4[3].name).toBe('Charlie')
+    })
+  })
 })

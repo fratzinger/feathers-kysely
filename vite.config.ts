@@ -11,7 +11,7 @@ export default defineConfig({
     globals: true,
     // projects: ['vitest'],
     includeSource: ['src/**/*.{js,ts}'],
-    include: ['test/**/special-operators.test.ts'],
+    include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
@@ -19,5 +19,6 @@ export default defineConfig({
     },
     fileParallelism: false,
     env: process.env,
+    // reporters: ['dot'],
   },
 })
