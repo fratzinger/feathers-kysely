@@ -387,7 +387,7 @@ export class KyselyAdapter<
         `${this.options.name}.${keyHere}`,
       )
 
-      query = addToQuery(query, `${mapKey}.${keyThere}`, { $ne: null })
+      query = addToQuery(query, { [`${mapKey}.${keyThere}`]: { $ne: null } })
 
       options.alreadyJoined.push(mapKey)
     }
