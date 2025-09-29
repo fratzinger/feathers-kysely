@@ -17,7 +17,7 @@ import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
 import type { DialectType, KyselyAdapterParams } from './declarations.js'
-import { sql } from 'kysely'
+import { expressionBuilder, sql } from 'kysely'
 import type {
   SelectExpression,
   ComparisonOperatorExpression,
@@ -26,6 +26,7 @@ import type {
   Kysely,
   SelectQueryBuilder,
   UpdateQueryBuilder,
+  ExpressionBuilder,
 } from 'kysely'
 import {
   applySelectId,
@@ -257,7 +258,7 @@ export class KyselyAdapter<
       const select =
         $select && Array.isArray($select) ? this.col($select) : $select
 
-      q = select ? q.select(select) : q.selectAll()
+      q = select ? q.select(select) : q.selectAll(this.options.name)
     }
 
     if (options?.where) {
@@ -283,7 +284,7 @@ export class KyselyAdapter<
     return q
   }
 
-  applyJoins<Q extends Record<string, any>>(
+  private applyJoins<Q extends Record<string, any>>(
     q: Q,
     params: Params,
     options: {
@@ -361,10 +362,19 @@ export class KyselyAdapter<
 
       if (!key.includes('.')) continue
 
-      const mapKey = key.split('.')[0]
+      const parts = key.split('.')
+      if (parts.length !== 2) continue
+
+      const [mapKey] = parts
 
       const map = this.options.relations[mapKey]
-      if (!map || !map.databaseTableName || !map.keyHere || !map.keyThere)
+      if (
+        !map ||
+        !map.databaseTableName ||
+        !map.keyHere ||
+        !map.keyThere ||
+        map.asArray /** only apply joins for belongsTo relations */
+      )
         continue
 
       if (options.alreadyJoined.includes(mapKey)) continue
@@ -385,6 +395,92 @@ export class KyselyAdapter<
     return { q, query }
   }
 
+  private handleHasMany(
+    eb: ExpressionBuilder<any, any>,
+    queryKey: string,
+    queryProperty: any,
+  ) {
+    if (!queryKey.includes('.') || !this.options.relations) {
+      return
+    }
+
+    const parts = queryKey.split('.')
+    if (parts.length !== 2) return
+
+    const [mapKey] = parts
+
+    const map = this.options.relations[mapKey]
+
+    if (
+      !map ||
+      !map.databaseTableName ||
+      !map.keyHere ||
+      !map.keyThere ||
+      !map.asArray
+    ) {
+      return
+    }
+
+    const nestedWhere = this.handleQueryPropertyNormal(
+      eb,
+      queryKey,
+      queryProperty,
+      {
+        plainPropertyKey: true,
+      },
+    )
+
+    const whereRef = eb
+      .selectFrom(`${map.databaseTableName} as ${mapKey}`)
+      .select(sql`1`)
+      .where((eb) =>
+        eb.and([
+          eb(`${mapKey}.${map.keyThere}`, '=', eb.ref(this.col(map.keyHere))),
+          ...(nestedWhere ? [nestedWhere] : []),
+        ]),
+      )
+
+    return eb.exists(whereRef)
+  }
+
+  private handleQueryPropertyNormal(
+    eb: ExpressionBuilder<any, any>,
+    queryKey: string,
+    queryProperty: any,
+    options?: { plainPropertyKey?: boolean },
+  ) {
+    if (queryKey === '$and' || queryKey === '$or') {
+      const method = eb[queryKey === '$and' ? 'and' : 'or']
+      const subs = []
+      for (const subQuery of queryProperty) {
+        const result = this.handleQuery(eb, subQuery)
+
+        if (result?.length) subs.push(eb.and(result))
+      }
+
+      return subs?.length ? method(subs) : undefined
+    }
+
+    const col = options?.plainPropertyKey ? queryKey : this.col(queryKey)
+
+    if (_.isObject(queryProperty)) {
+      const qs = []
+      // loop through OPERATORS and apply them
+      for (const operator in queryProperty) {
+        const value = queryProperty[operator]
+        const op = this.getOperator(operator, value)
+        if (!op) continue
+        qs.push(eb(col, op, this.transformOperatorValue(operator, value)))
+      }
+
+      return qs?.length ? eb.and(qs) : undefined
+    } else {
+      const op = this.getOperator('$eq', queryProperty)
+      if (!op) return
+      return eb(col, op, queryProperty)
+    }
+  }
+
   private applyJoinsForOrderBy<Q extends Record<string, any>>(
     q: Q,
     $sort: SortFilter,
@@ -402,7 +498,13 @@ export class KyselyAdapter<
       const mapKey = key.split('.')[0]
 
       const map = this.options.relations[mapKey]
-      if (!map || !map.databaseTableName || !map.keyHere || !map.keyThere)
+      if (
+        !map ||
+        !map.databaseTableName ||
+        !map.keyHere ||
+        !map.keyThere ||
+        map.asArray /** only apply joins for belongsTo relations */
+      )
         continue
 
       if (options.alreadyJoined.includes(mapKey)) continue
@@ -469,75 +571,57 @@ export class KyselyAdapter<
   applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
     // loop through params and call the where filters
 
-    for (const queryKey in query) {
-      const queryProperty = query[queryKey]
+    if (!query || Object.keys(query).length === 0) {
+      return q
+    }
 
-      // ignore filters - just for safety
-      if (FILTERS.includes(queryKey as Filter)) {
+    const eb = expressionBuilder()
+
+    const result = this.handleQuery(eb, query)
+
+    return result?.length ? q.where((eb) => eb.and(result)) : q
+  }
+
+  handleQueryProperty(
+    eb: ExpressionBuilder<any, any>,
+    queryKey: string,
+    queryProperty: any,
+    options?: { plainPropertyKey?: boolean },
+  ) {
+    // ignore filters - just for safety
+    if (FILTERS.includes(queryKey as Filter)) {
+      return undefined
+    }
+
+    const hasMany = this.handleHasMany(eb, queryKey, queryProperty)
+
+    if (hasMany) return hasMany
+
+    const normal = this.handleQueryPropertyNormal(
+      eb,
+      queryKey,
+      queryProperty,
+      options,
+    )
+
+    if (normal) return normal
+  }
+
+  private handleQuery(eb: ExpressionBuilder<any, any>, query: Query): any {
+    const qs: any[] = []
+    if (!query) return qs
+
+    for (const queryKey in query) {
+      const q = this.handleQueryProperty(eb, queryKey, query[queryKey])
+
+      if (!q) {
         continue
       }
 
-      if (queryKey === '$and' || queryKey === '$or') {
-        q = q.where((qb: any) => {
-          return this.handleAndOr(qb, queryKey, queryProperty)
-        })
-      } else if (_.isObject(queryProperty)) {
-        // loop through OPERATORS and apply them
-        for (const operator in queryProperty) {
-          const value = queryProperty[operator]
-          const op = this.getOperator(operator, value)
-          if (!op) continue
-          q = q.where(
-            this.col(queryKey),
-            op,
-            this.transformOperatorValue(operator, value),
-          )
-        }
-      } else {
-        const op = this.getOperator('$eq', queryProperty)
-        if (!op) continue
-        q = q.where(this.col(queryKey), op, queryProperty)
-      }
+      qs.push(q)
     }
 
-    return q
-  }
-
-  private handleAndOr(qb: any, key: '$and' | '$or', value: Query[]) {
-    const method = qb[key === '$and' ? 'and' : 'or']
-    const subs = value.map((subParams: Query) => {
-      return this.handleSubQuery(qb, subParams)
-    })
-    return method(subs)
-  }
-
-  private handleSubQuery(qb: any, query: Query): any {
-    return qb.and(
-      Object.entries(query).map(([key, value]) => {
-        if (key === '$and' || key === '$or') {
-          return this.handleAndOr(qb, key, value)
-        } else if (_.isObject(value)) {
-          // loop through OPERATORS and apply them
-          return qb.and(
-            Object.entries(OPERATORS)
-              .filter(([operator, op]) => {
-                // eslint-disable-next-line no-prototype-builtins
-                return value?.hasOwnProperty(operator)
-              })
-              .map(([operator, op]) => {
-                const val = value[operator]
-                return this.whereCompare(qb, key, operator, val)
-              }),
-          )
-        } else {
-          return this.whereCompare(qb, key, '$eq', value)
-        }
-      }),
-    )
-  }
-
-  private whereCompare(qb: any, key: string, operator: any, value: any) {
-    return qb.eb(this.col(key), this.getOperator(operator, value), value)
+    return qs?.length ? qs : undefined
   }
 
   applySort<Q extends SelectQueryBuilder<any, string, any>>(
@@ -620,8 +704,6 @@ export class KyselyAdapter<
       const data = filters.$limit === 0 ? [] : queryResult
       const total = Number((countQueryResult as any)?.total ?? 0) || 0
 
-      // console.log(data)
-
       return {
         total,
         limit: filters.$limit!,
@@ -698,7 +780,7 @@ export class KyselyAdapter<
     const from = this.Model.selectFrom(name)
     const select =
       $select && Array.isArray($select) ? this.col($select) : $select
-    const selected = select ? from.select(select) : from.selectAll()
+    const selected = select ? from.select(select) : from.selectAll(name)
     const where =
       ids.length === 1
         ? selected.where(this.col(idField), '=', ids[0])
