@@ -242,6 +242,8 @@ export class KyselyAdapter<
     const filters = filterQueryResult.filters
     let query = filterQueryResult.query
 
+    console.log('name', this.options.name)
+
     let q = this.Model.selectFrom(this.options.name)
     const applyResult = this.applyJoins(q, filterQueryResult.params, {
       where: options?.where,
@@ -449,6 +451,7 @@ export class KyselyAdapter<
     queryProperty: any,
     options?: { plainPropertyKey?: boolean },
   ) {
+    console.log('handleQueryPropertyNormal', queryKey, queryProperty)
     if (queryKey === '$and' || queryKey === '$or') {
       const method = eb[queryKey === '$and' ? 'and' : 'or']
       const subs = []
@@ -464,19 +467,29 @@ export class KyselyAdapter<
     const col = options?.plainPropertyKey ? queryKey : this.col(queryKey)
 
     if (_.isObject(queryProperty)) {
+      console.log('isObject', queryKey, queryProperty)
       const qs = []
       // loop through OPERATORS and apply them
       for (const operator in queryProperty) {
         const value = queryProperty[operator]
         const op = this.getOperator(operator, value)
         if (!op) continue
+        console.log(
+          'property',
+          col,
+          op,
+          value,
+          this.transformOperatorValue(operator, value),
+        )
         qs.push(eb(col, op, this.transformOperatorValue(operator, value)))
       }
 
       return qs?.length ? eb.and(qs) : undefined
     } else {
+      console.log('not isObject', queryKey, queryProperty)
       const op = this.getOperator('$eq', queryProperty)
       if (!op) return
+      console.log('property', col, op, queryProperty)
       return eb(col, op, queryProperty)
     }
   }
