@@ -156,6 +156,7 @@ export class KyselyAdapter<
     this.propertyMap = new Map<string, any>(
       Object.entries(options.properties || {}),
     )
+    console.log(options.name, this.propertyMap)
   }
 
   private getDatabaseDialect(db?: Kysely<any>): DialectType {
