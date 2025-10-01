@@ -368,36 +368,41 @@ export class KyselyAdapter<
         continue
       }
 
-      if (!key.includes('.')) continue
+      let relation = this.options.relations[key]
+      let relationKey = key
 
-      const parts = key.split('.')
-      if (parts.length !== 2) continue
+      if (!relation && key.includes('.')) {
+        const parts = key.split('.')
+        if (parts.length !== 2) continue
 
-      const [mapKey] = parts
+        relationKey = parts[0]
+        relation = this.options.relations[relationKey]
+      }
 
-      const map = this.options.relations[mapKey]
       if (
-        !map ||
-        !map.databaseTableName ||
-        !map.keyHere ||
-        !map.keyThere ||
-        map.asArray /** only apply joins for belongsTo relations */
+        !relation ||
+        !relation.databaseTableName ||
+        !relation.keyHere ||
+        !relation.keyThere ||
+        relation.asArray /** only apply joins for belongsTo relations */
       )
         continue
 
-      if (options.alreadyJoined.includes(mapKey)) continue
+      if (options.alreadyJoined.includes(relationKey)) continue
 
-      const { databaseTableName, keyHere, keyThere } = map
+      const { databaseTableName, keyHere, keyThere } = relation
 
       q = q.leftJoin(
-        `${databaseTableName} as ${mapKey}`,
-        `${mapKey}.${keyThere}`,
+        `${databaseTableName} as ${relationKey}`,
+        `${relationKey}.${keyThere}`,
         `${this.options.name}.${keyHere}`,
       )
 
-      query = addToQuery(query, { [`${mapKey}.${keyThere}`]: { $ne: null } })
+      query = addToQuery(query, {
+        [`${relationKey}.${keyThere}`]: { $ne: null },
+      })
 
-      options.alreadyJoined.push(mapKey)
+      options.alreadyJoined.push(relationKey)
     }
 
     return { q, query }
@@ -478,6 +483,69 @@ export class KyselyAdapter<
       )
 
     return eb.exists(whereRef)
+  }
+
+  private handleBelongsTo(
+    eb: ExpressionBuilder<any, any>,
+    queryKey: string,
+    queryProperty: any,
+  ) {
+    if (!this.options.relations) return
+
+    let relation = this.options.relations[queryKey]
+
+    if (!relation && !queryKey.includes('.')) {
+      return
+    }
+
+    let relationKey = queryKey
+    let nested = true
+
+    if (!relation) {
+      const parts = queryKey.split('.')
+      if (parts.length !== 2) return
+
+      relationKey = parts[0]
+      nested = false
+
+      relation = this.options.relations[relationKey]
+    }
+
+    if (
+      !relation ||
+      !relation.databaseTableName ||
+      !relation.keyHere ||
+      !relation.keyThere ||
+      relation.asArray
+    ) {
+      return
+    }
+
+    const subQueries: ExpressionWrapper<any, any, any>[] = []
+
+    if (nested) {
+      for (const subKey in queryProperty) {
+        const subQuery = this.handleQueryProperty(
+          eb,
+          subKey,
+          queryProperty[subKey],
+          { tableName: relationKey },
+        )
+
+        if (subQuery) subQueries.push(subQuery)
+      }
+    } else {
+      const subQuery = this.handleQueryPropertyNormal(
+        eb,
+        queryKey,
+        queryProperty,
+        { tableName: null },
+      )
+
+      if (subQuery) subQueries.push(subQuery)
+    }
+
+    return subQueries.length === 0 ? undefined : eb.and(subQueries)
   }
 
   private handleQueryPropertyNormal(
@@ -660,6 +728,10 @@ export class KyselyAdapter<
     const hasMany = this.handleHasMany(eb, queryKey, queryProperty)
 
     if (hasMany) return hasMany
+
+    const belongsTo = this.handleBelongsTo(eb, queryKey, queryProperty)
+
+    if (belongsTo) return belongsTo
 
     const normal = this.handleQueryPropertyNormal(
       eb,
