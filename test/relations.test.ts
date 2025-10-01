@@ -31,7 +31,7 @@ function setup() {
   const db = new Kysely<DB>({
     dialect: dialect(),
     // log(event) {
-    //   console.log(event.query.sql)
+    //   console.log(event.query.sql, event.query.parameters)
     // },
   })
 
@@ -152,7 +152,7 @@ describe('relations', () => {
     assert.ok(aliceTodos.every((todo) => todo.userId === users[0].id))
   })
 
-  it('query for hasMany 1', async () => {
+  it('query for hasMany with dot.notation 1', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
@@ -174,7 +174,7 @@ describe('relations', () => {
     assert.ok(bob)
   })
 
-  it('query for hasMany 2', async () => {
+  it('query for hasMany with dot.notation 2', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
@@ -190,6 +190,30 @@ describe('relations', () => {
     const usersWithTodos = await app
       .service('users')
       .find({ query: { 'todos.text': { $like: '%todo%' } }, paginate: false })
+    assert.strictEqual(usersWithTodos.length, 2)
+    const alice = usersWithTodos.find((u) => u.name === 'Alice')
+    const bob = usersWithTodos.find((u) => u.name === 'Bob')
+    assert.ok(alice)
+    assert.ok(bob)
+  })
+
+  it.only('query for hasMany with nested notation 1', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    const createdTodos = await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    const usersWithTodos = await app.service('users').find({
+      query: { todos: { text: { $like: '%todo%' } } },
+      paginate: false,
+    })
     assert.strictEqual(usersWithTodos.length, 2)
     const alice = usersWithTodos.find((u) => u.name === 'Alice')
     const bob = usersWithTodos.find((u) => u.name === 'Bob')
