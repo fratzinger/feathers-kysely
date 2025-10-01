@@ -197,7 +197,7 @@ describe('relations', () => {
     assert.ok(bob)
   })
 
-  it.only('query for hasMany with nested notation 1', async () => {
+  it('query for hasMany with nested notation 1', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
