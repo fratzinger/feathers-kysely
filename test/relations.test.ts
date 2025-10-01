@@ -133,7 +133,7 @@ describe('relations', () => {
 
   afterAll(() => db.destroy())
 
-  it('query for belongsTo', async () => {
+  it('query for belongsTo with dot.notation', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
@@ -148,6 +148,25 @@ describe('relations', () => {
     const aliceTodos = await app
       .service('todos')
       .find({ query: { 'user.name': 'Alice' }, paginate: false })
+    assert.strictEqual(aliceTodos.length, 2)
+    assert.ok(aliceTodos.every((todo) => todo.userId === users[0].id))
+  })
+
+  it('query for belongsTo with nested notation', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    const createdTodos = await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    const aliceTodos = await app
+      .service('todos')
+      .find({ query: { user: { name: 'Alice' } }, paginate: false })
     assert.strictEqual(aliceTodos.length, 2)
     assert.ok(aliceTodos.every((todo) => todo.userId === users[0].id))
   })
