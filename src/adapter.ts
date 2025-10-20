@@ -897,7 +897,9 @@ export class KyselyAdapter<
       isArray: boolean
       options: KyselyAdapterOptionsDefined
       $select?: string[]
-      ids?: number[]
+      buildWhere?: (
+        query: SelectQueryBuilder<any, any, any>,
+      ) => SelectQueryBuilder<any, any, any>
     },
   ) {
     const { isArray, options, $select } = context
@@ -913,18 +915,26 @@ export class KyselyAdapter<
 
     // mysql only
 
-    const { insertId, numInsertedOrUpdatedRows } = response as any
-    const id = Number(insertId)
-    const count = Number(numInsertedOrUpdatedRows)
-
-    const ids =
-      context.ids ||
-      (isArray ? [...Array(count).keys()].map((i) => id + i) : [id])
-
     const from = this.Model.selectFrom(name)
     const select =
       $select && Array.isArray($select) ? this.col($select) : $select
     const selected = select ? from.select(select) : from.selectAll(name)
+
+    // If a custom WHERE builder is provided, use it
+    if (context.buildWhere) {
+      const query = context.buildWhere(selected)
+      return isArray
+        ? query.execute().catch(errorHandler)
+        : query.executeTakeFirst().catch(errorHandler)
+    }
+
+    // Standard insert logic (build WHERE based on insertId)
+    const { insertId, numInsertedOrUpdatedRows } = response as any
+    const id = Number(insertId)
+    const count = Number(numInsertedOrUpdatedRows)
+
+    const ids = isArray ? [...Array(count).keys()].map((i) => id + i) : [id]
+
     const where =
       ids.length === 1
         ? selected.where(this.col(idField), '=', ids[0])
@@ -1007,22 +1017,13 @@ export class KyselyAdapter<
     // Apply conflict resolution based on database dialect
     if (onConflictFields.length > 0) {
       if (dialectType === 'mysql') {
-        throw new BadRequest(
-          'MySQL does not support onConflict in the same way. Consider using ON DUPLICATE KEY UPDATE syntax.',
-        )
-      }
-
-      // PostgreSQL and SQLite support ON CONFLICT
-      const conflictColumns = onConflictFields.map((field) =>
-        this.col(field as string),
-      )
-
-      if (onConflictAction === 'ignore') {
-        q = q.onConflict((oc) => oc.columns(conflictColumns).doNothing())
-      } else if (onConflictAction === 'merge') {
-        q = q.onConflict((oc) => {
-          const conflict = oc.columns(conflictColumns)
-
+        // MySQL uses ON DUPLICATE KEY UPDATE
+        if (onConflictAction === 'ignore') {
+          // For ignore in MySQL, use a dummy update (set id = id) which doesn't change anything
+          q = q.onDuplicateKeyUpdate({
+            [idField]: sql.ref(idField),
+          })
+        } else if (onConflictAction === 'merge') {
           // Determine which fields to update
           let fieldsToUpdate: string[]
 
@@ -1049,22 +1050,76 @@ export class KyselyAdapter<
             )
           }
 
-          // Build the update set
-          if (fieldsToUpdate.length === 0) {
-            // No fields to update, just do nothing
-            return conflict.doNothing()
+          if (fieldsToUpdate.length > 0) {
+            // Build the update set using VALUES() function for MySQL
+            const updateObject = fieldsToUpdate.reduce(
+              (acc, field) => {
+                // In MySQL, we reference the new values using VALUES(column_name)
+                // Don't use this.col() here as it might add table prefix which VALUES() doesn't support
+                acc[field] = sql`VALUES(${sql.ref(field)})`
+                return acc
+              },
+              {} as Record<string, any>,
+            )
+
+            q = q.onDuplicateKeyUpdate(updateObject)
           }
+        }
+      } else {
+        // PostgreSQL and SQLite support ON CONFLICT
+        const conflictColumns = onConflictFields.map((field) =>
+          this.col(field as string),
+        )
 
-          const updateObject = fieldsToUpdate.reduce(
-            (acc, field) => {
-              acc[field] = sql.ref(`excluded.${field}`)
-              return acc
-            },
-            {} as Record<string, any>,
-          )
+        if (onConflictAction === 'ignore') {
+          q = q.onConflict((oc) => oc.columns(conflictColumns).doNothing())
+        } else if (onConflictAction === 'merge') {
+          q = q.onConflict((oc) => {
+            const conflict = oc.columns(conflictColumns)
 
-          return conflict.doUpdateSet(updateObject)
-        })
+            // Determine which fields to update
+            let fieldsToUpdate: string[]
+
+            if (onConflictMergeFields && onConflictMergeFields.length > 0) {
+              // Use explicitly specified merge fields
+              fieldsToUpdate = onConflictMergeFields
+                .filter(
+                  (field) =>
+                    !onConflictExcludeFields.includes(field) &&
+                    !onConflictFields.includes(field),
+                )
+                .map((field) => field as string)
+            } else {
+              // Use all fields from data except id, conflict fields, and excluded fields
+              const dataKeys = isArray
+                ? Object.keys((_data as Data[])[0] || {})
+                : Object.keys(_data as Record<string, any>)
+
+              fieldsToUpdate = dataKeys.filter(
+                (key) =>
+                  key !== idField &&
+                  !onConflictFields.includes(key as any) &&
+                  !onConflictExcludeFields.includes(key as any),
+              )
+            }
+
+            // Build the update set
+            if (fieldsToUpdate.length === 0) {
+              // No fields to update, just do nothing
+              return conflict.doNothing()
+            }
+
+            const updateObject = fieldsToUpdate.reduce(
+              (acc, field) => {
+                acc[field] = sql.ref(`excluded.${field}`)
+                return acc
+              },
+              {} as Record<string, any>,
+            )
+
+            return conflict.doUpdateSet(updateObject)
+          })
+        }
       }
     }
 
@@ -1077,80 +1132,106 @@ export class KyselyAdapter<
       isArray,
       options,
       $select,
+      buildWhere:
+        dialectType === 'mysql' && onConflictFields.length > 0
+          ? (selected) => {
+              // For MySQL upserts, fetch records based on conflict fields
+              const dataArray = isArray ? (_data as Data[]) : [_data as Data]
+
+              // Build OR conditions for each data item
+              return selected.where((eb) =>
+                eb.or(
+                  dataArray.map((item) =>
+                    eb.and(
+                      onConflictFields.map((field) =>
+                        eb(
+                          this.col(field as string),
+                          '=',
+                          item[field as keyof Data],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            }
+          : undefined,
     })
 
     // When using onConflict with doNothing, if a conflict occurs, the returning clause
     // won't return anything. We need to fetch the existing records in that case.
-    if (
-      onConflictAction === 'ignore' &&
-      onConflictFields.length > 0 &&
-      dialectType !== 'mysql'
-    ) {
-      if (isArray) {
-        // For arrays, some records might have been inserted and some ignored
-        const responseArray = (response || []) as Result[]
-        const dataArray = _data as Data[]
+    if (onConflictAction === 'ignore' && onConflictFields.length > 0) {
+      if (dialectType === 'mysql') {
+        // For MySQL, executeAndReturn already handled fetching based on conflict fields
+        return response
+      } else {
+        // PostgreSQL and SQLite
+        if (isArray) {
+          // For arrays, some records might have been inserted and some ignored
+          const responseArray = (response || []) as Result[]
+          const dataArray = _data as Data[]
 
-        // Find which records were not inserted by comparing with input data
-        if (responseArray.length < dataArray.length) {
-          // Build a query to find the missing records
-          const from = this.Model.selectFrom(name)
-          const select =
-            $select && Array.isArray($select) ? this.col($select) : $select
-          const selected = select ? from.select(select) : from.selectAll(name)
+          // Find which records were not inserted by comparing with input data
+          if (responseArray.length < dataArray.length) {
+            // Build a query to find the missing records
+            const from = this.Model.selectFrom(name)
+            const select =
+              $select && Array.isArray($select) ? this.col($select) : $select
+            const selected = select ? from.select(select) : from.selectAll(name)
 
-          // Build OR conditions for each conflict field combination
-          const missingRecords: Result[] = []
-          for (const item of dataArray) {
-            // Check if this item is already in the response
-            const isInResponse = responseArray.some((r) =>
-              onConflictFields.every((field) => {
-                const rVal = r[field as keyof Result]
-                const itemVal = item[field as keyof Data]
-                return rVal === (itemVal as any)
-              }),
-            )
+            // Build OR conditions for each conflict field combination
+            const missingRecords: Result[] = []
+            for (const item of dataArray) {
+              // Check if this item is already in the response
+              const isInResponse = responseArray.some((r) =>
+                onConflictFields.every((field) => {
+                  const rVal = r[field as keyof Result]
+                  const itemVal = item[field as keyof Data]
+                  return rVal === (itemVal as any)
+                }),
+              )
 
-            if (!isInResponse) {
-              // Fetch the existing record
-              let query = selected
-              for (const field of onConflictFields) {
-                query = query.where(
-                  this.col(field as string),
-                  '=',
-                  item[field as keyof Data],
-                ) as any
-              }
-              const existing = await query
-                .executeTakeFirst()
-                .catch(errorHandler)
-              if (existing) {
-                missingRecords.push(existing as Result)
+              if (!isInResponse) {
+                // Fetch the existing record
+                let query = selected
+                for (const field of onConflictFields) {
+                  query = query.where(
+                    this.col(field as string),
+                    '=',
+                    item[field as keyof Data],
+                  ) as any
+                }
+                const existing = await query
+                  .executeTakeFirst()
+                  .catch(errorHandler)
+                if (existing) {
+                  missingRecords.push(existing as Result)
+                }
               }
             }
+
+            return [...responseArray, ...missingRecords] as Result[]
           }
+        } else {
+          // For single record, if response is undefined/null, fetch the existing record
+          if (!response) {
+            const from = this.Model.selectFrom(name)
+            const select =
+              $select && Array.isArray($select) ? this.col($select) : $select
+            const selected = select ? from.select(select) : from.selectAll(name)
 
-          return [...responseArray, ...missingRecords] as Result[]
-        }
-      } else {
-        // For single record, if response is undefined/null, fetch the existing record
-        if (!response) {
-          const from = this.Model.selectFrom(name)
-          const select =
-            $select && Array.isArray($select) ? this.col($select) : $select
-          const selected = select ? from.select(select) : from.selectAll(name)
+            let query = selected
+            for (const field of onConflictFields) {
+              query = query.where(
+                this.col(field as string),
+                '=',
+                (_data as Data)[field as keyof Data],
+              ) as any
+            }
 
-          let query = selected
-          for (const field of onConflictFields) {
-            query = query.where(
-              this.col(field as string),
-              '=',
-              (_data as Data)[field as keyof Data],
-            ) as any
+            const existing = await query.executeTakeFirst().catch(errorHandler)
+            return existing as Result
           }
-
-          const existing = await query.executeTakeFirst().catch(errorHandler)
-          return existing as Result
         }
       }
     }
@@ -1176,7 +1257,7 @@ export class KyselyAdapter<
       const returning = this.applyReturning(withWhere, filters.$select)
       const result = {
         q: returning,
-        ids: undefined,
+        buildWhere: undefined,
         items: undefined,
       }
 
@@ -1200,7 +1281,12 @@ export class KyselyAdapter<
       const withWhere = (q as any).where(this.col(idField), '=', id)
       const returning = this.applyReturning(withWhere, filters.$select)
 
-      return { q: returning as Q, ids: [id], items: [result] }
+      return {
+        q: returning as Q,
+        buildWhere: (selected: SelectQueryBuilder<any, any, any>) =>
+          selected.where(this.col(idField), '=', id),
+        items: [result],
+      }
     }
 
     const items = await this._find({
@@ -1215,7 +1301,7 @@ export class KyselyAdapter<
     const ids = items.map((item) => item[idField])
 
     if (ids.length === 0) {
-      return { q: undefined, ids: undefined, items: undefined }
+      return { q: undefined, buildWhere: undefined, items: undefined }
     }
 
     const withWhere =
@@ -1227,7 +1313,10 @@ export class KyselyAdapter<
 
     return {
       q: returning as Q,
-      ids,
+      buildWhere: (selected: SelectQueryBuilder<any, any, any>) =>
+        ids.length === 1
+          ? selected.where(this.col(idField), '=', ids[0])
+          : selected.where(this.col(idField), 'in', ids),
       items,
     }
   }
@@ -1268,7 +1357,7 @@ export class KyselyAdapter<
 
     const updateTable = this.Model.updateTable(name).set(_.omit(data, idField))
 
-    const { q, ids } = await this.getWhereForUpdateOrDelete(
+    const { q, buildWhere } = await this.getWhereForUpdateOrDelete(
       updateTable,
       id,
       params,
@@ -1286,7 +1375,7 @@ export class KyselyAdapter<
       isArray: asMulti,
       options,
       $select: filters.$select,
-      ids,
+      buildWhere,
     })
 
     if (!asMulti && !response) {

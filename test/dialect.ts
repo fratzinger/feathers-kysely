@@ -11,12 +11,21 @@ const createdDialects: Record<string, Dialect> = {}
 const dialectValues = ['postgres', 'mysql', 'sqlite'] as const
 export type DialectType = (typeof dialectValues)[number]
 
-export const getDialect = (): DialectType => {
-  if (!process.env.DB) return 'sqlite'
-  if (dialectValues.includes(process.env.DB as any))
-    return process.env.DB as DialectType
+let logged = false
 
-  return 'sqlite'
+export const getDialect = (): DialectType => {
+  const result = !process.env.DB
+    ? 'sqlite'
+    : dialectValues.includes(process.env.DB as any)
+      ? (process.env.DB as DialectType)
+      : 'sqlite'
+
+  if (!logged) {
+    console.log(`Using dialect: ${result}`)
+    logged = true
+  }
+
+  return result
 }
 
 export default (): Dialect => {

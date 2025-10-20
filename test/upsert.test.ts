@@ -38,14 +38,18 @@ function setup() {
     // drop and recreate the products table
     await db.schema.dropTable('products').ifExists().execute()
 
+    // Use varchar for MySQL (text can't have unique index without prefix length)
+    // Use text for other databases
+    const textType = dialectType === 'mysql' ? 'varchar(255)' : 'text'
+
     const builder = addPrimaryKey(
       db.schema
         .createTable('products')
-        .addColumn('sku', 'text', (col) => col.notNull().unique())
-        .addColumn('name', 'text', (col) => col.notNull())
+        .addColumn('sku', textType, (col) => col.notNull().unique())
+        .addColumn('name', textType, (col) => col.notNull())
         .addColumn('price', 'real', (col) => col.notNull())
         .addColumn('stock', 'real')
-        .addColumn('description', 'text'),
+        .addColumn('description', textType),
       'id',
     )
 
