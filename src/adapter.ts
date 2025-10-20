@@ -946,6 +946,192 @@ export class KyselyAdapter<
   }
 
   /**
+   * Build WHERE clause for fetching records by conflict fields
+   */
+  private buildWhereForConflictFields(
+    selected: SelectQueryBuilder<any, any, any>,
+    data: Data | Data[],
+    conflictFields: (keyof Result)[],
+    isArray: boolean,
+  ): SelectQueryBuilder<any, any, any> {
+    const dataArray = isArray ? (data as Data[]) : [data as Data]
+
+    // Build OR conditions for each data item
+    return selected.where((eb) =>
+      eb.or(
+        dataArray.map((item) =>
+          eb.and(
+            conflictFields.map((field) =>
+              eb(this.col(field as string), '=', item[field as keyof Data]),
+            ),
+          ),
+        ),
+      ),
+    )
+  }
+
+  /**
+   * Apply upsert conflict resolution for MySQL using ON DUPLICATE KEY UPDATE
+   */
+  private applyMySqlUpsertConflict(
+    query: InsertQueryBuilder<any, any, any>,
+    options: {
+      onConflictAction: 'ignore' | 'merge'
+      onConflictFields: (keyof Result)[]
+      onConflictMergeFields?: (keyof Result)[]
+      onConflictExcludeFields: (keyof Result)[]
+      data: Data | Data[]
+      isArray: boolean
+    },
+  ): InsertQueryBuilder<any, any, any> {
+    const { id: idField } = this.options
+
+    const {
+      onConflictAction,
+      onConflictFields,
+      onConflictMergeFields,
+      onConflictExcludeFields,
+      data,
+      isArray,
+    } = options
+
+    if (onConflictAction === 'ignore') {
+      // For ignore in MySQL, use a dummy update (set id = id) which doesn't change anything
+      return query.onDuplicateKeyUpdate({
+        [idField]: sql.ref(idField),
+      })
+    }
+
+    // onConflictAction === 'merge'
+    const fieldsToUpdate = this.getFieldsToUpdate({
+      data,
+      isArray,
+      onConflictFields,
+      onConflictMergeFields,
+      onConflictExcludeFields,
+    })
+
+    if (fieldsToUpdate.length === 0) {
+      return query
+    }
+
+    // Build the update set using VALUES() function for MySQL
+    const updateObject = fieldsToUpdate.reduce(
+      (acc, field) => {
+        // In MySQL, we reference the new values using VALUES(column_name)
+        // Don't use this.col() here as it might add table prefix which VALUES() doesn't support
+        acc[field] = sql`VALUES(${sql.ref(field)})`
+        return acc
+      },
+      {} as Record<string, any>,
+    )
+
+    return query.onDuplicateKeyUpdate(updateObject)
+  }
+
+  /**
+   * Apply upsert conflict resolution for PostgreSQL/SQLite using ON CONFLICT
+   */
+  private applyPostgresUpsertConflict(
+    query: InsertQueryBuilder<any, any, any>,
+    options: {
+      onConflictAction: 'ignore' | 'merge'
+      onConflictFields: (keyof Result)[]
+      onConflictMergeFields?: (keyof Result)[]
+      onConflictExcludeFields: (keyof Result)[]
+      data: Data | Data[]
+      isArray: boolean
+    },
+  ): InsertQueryBuilder<any, any, any> {
+    const {
+      onConflictAction,
+      onConflictFields,
+      onConflictMergeFields,
+      onConflictExcludeFields,
+      data,
+      isArray,
+    } = options
+
+    const conflictColumns = onConflictFields.map((field) =>
+      this.col(field as string),
+    )
+
+    if (onConflictAction === 'ignore') {
+      return query.onConflict((oc) => oc.columns(conflictColumns).doNothing())
+    }
+
+    // onConflictAction === 'merge'
+    return query.onConflict((oc) => {
+      const conflict = oc.columns(conflictColumns)
+
+      const fieldsToUpdate = this.getFieldsToUpdate({
+        data,
+        isArray,
+        onConflictFields,
+        onConflictMergeFields,
+        onConflictExcludeFields,
+      })
+
+      if (fieldsToUpdate.length === 0) {
+        return conflict.doNothing()
+      }
+
+      const updateObject = fieldsToUpdate.reduce(
+        (acc, field) => {
+          acc[field] = sql.ref(`excluded.${field}`)
+          return acc
+        },
+        {} as Record<string, any>,
+      )
+
+      return conflict.doUpdateSet(updateObject)
+    })
+  }
+
+  /**
+   * Determine which fields should be updated during an upsert
+   */
+  private getFieldsToUpdate(options: {
+    data: Data | Data[]
+    isArray: boolean
+    onConflictFields: (keyof Result)[]
+    onConflictMergeFields?: (keyof Result)[]
+    onConflictExcludeFields: (keyof Result)[]
+  }): string[] {
+    const { id: idField } = this.options
+    const {
+      data,
+      isArray,
+      onConflictFields,
+      onConflictMergeFields,
+      onConflictExcludeFields,
+    } = options
+
+    if (onConflictMergeFields && onConflictMergeFields.length > 0) {
+      // Use explicitly specified merge fields
+      return onConflictMergeFields
+        .filter(
+          (field) =>
+            !onConflictExcludeFields.includes(field) &&
+            !onConflictFields.includes(field),
+        )
+        .map((field) => field as string)
+    }
+
+    // Use all fields from data except id, conflict fields, and excluded fields
+    const dataKeys = isArray
+      ? Object.keys((data as Data[])[0] || {})
+      : Object.keys(data as Record<string, any>)
+
+    return dataKeys.filter(
+      (key) =>
+        key !== idField &&
+        !onConflictFields.includes(key as any) &&
+        !onConflictExcludeFields.includes(key as any),
+    )
+  }
+
+  /**
    * Create a single record
    * See https://kysely-org.github.io/kysely/classes/InsertQueryBuilder.html
    * @param data
@@ -1016,111 +1202,19 @@ export class KyselyAdapter<
 
     // Apply conflict resolution based on database dialect
     if (onConflictFields.length > 0) {
-      if (dialectType === 'mysql') {
-        // MySQL uses ON DUPLICATE KEY UPDATE
-        if (onConflictAction === 'ignore') {
-          // For ignore in MySQL, use a dummy update (set id = id) which doesn't change anything
-          q = q.onDuplicateKeyUpdate({
-            [idField]: sql.ref(idField),
-          })
-        } else if (onConflictAction === 'merge') {
-          // Determine which fields to update
-          let fieldsToUpdate: string[]
-
-          if (onConflictMergeFields && onConflictMergeFields.length > 0) {
-            // Use explicitly specified merge fields
-            fieldsToUpdate = onConflictMergeFields
-              .filter(
-                (field) =>
-                  !onConflictExcludeFields.includes(field) &&
-                  !onConflictFields.includes(field),
-              )
-              .map((field) => field as string)
-          } else {
-            // Use all fields from data except id, conflict fields, and excluded fields
-            const dataKeys = isArray
-              ? Object.keys((_data as Data[])[0] || {})
-              : Object.keys(_data as Record<string, any>)
-
-            fieldsToUpdate = dataKeys.filter(
-              (key) =>
-                key !== idField &&
-                !onConflictFields.includes(key as any) &&
-                !onConflictExcludeFields.includes(key as any),
-            )
-          }
-
-          if (fieldsToUpdate.length > 0) {
-            // Build the update set using VALUES() function for MySQL
-            const updateObject = fieldsToUpdate.reduce(
-              (acc, field) => {
-                // In MySQL, we reference the new values using VALUES(column_name)
-                // Don't use this.col() here as it might add table prefix which VALUES() doesn't support
-                acc[field] = sql`VALUES(${sql.ref(field)})`
-                return acc
-              },
-              {} as Record<string, any>,
-            )
-
-            q = q.onDuplicateKeyUpdate(updateObject)
-          }
-        }
-      } else {
-        // PostgreSQL and SQLite support ON CONFLICT
-        const conflictColumns = onConflictFields.map((field) =>
-          this.col(field as string),
-        )
-
-        if (onConflictAction === 'ignore') {
-          q = q.onConflict((oc) => oc.columns(conflictColumns).doNothing())
-        } else if (onConflictAction === 'merge') {
-          q = q.onConflict((oc) => {
-            const conflict = oc.columns(conflictColumns)
-
-            // Determine which fields to update
-            let fieldsToUpdate: string[]
-
-            if (onConflictMergeFields && onConflictMergeFields.length > 0) {
-              // Use explicitly specified merge fields
-              fieldsToUpdate = onConflictMergeFields
-                .filter(
-                  (field) =>
-                    !onConflictExcludeFields.includes(field) &&
-                    !onConflictFields.includes(field),
-                )
-                .map((field) => field as string)
-            } else {
-              // Use all fields from data except id, conflict fields, and excluded fields
-              const dataKeys = isArray
-                ? Object.keys((_data as Data[])[0] || {})
-                : Object.keys(_data as Record<string, any>)
-
-              fieldsToUpdate = dataKeys.filter(
-                (key) =>
-                  key !== idField &&
-                  !onConflictFields.includes(key as any) &&
-                  !onConflictExcludeFields.includes(key as any),
-              )
-            }
-
-            // Build the update set
-            if (fieldsToUpdate.length === 0) {
-              // No fields to update, just do nothing
-              return conflict.doNothing()
-            }
-
-            const updateObject = fieldsToUpdate.reduce(
-              (acc, field) => {
-                acc[field] = sql.ref(`excluded.${field}`)
-                return acc
-              },
-              {} as Record<string, any>,
-            )
-
-            return conflict.doUpdateSet(updateObject)
-          })
-        }
+      const upsertOptions = {
+        onConflictAction,
+        onConflictFields,
+        onConflictMergeFields,
+        onConflictExcludeFields,
+        data: _data,
+        isArray,
       }
+
+      q =
+        dialectType === 'mysql'
+          ? this.applyMySqlUpsertConflict(q, upsertOptions)
+          : this.applyPostgresUpsertConflict(q, upsertOptions)
     }
 
     const returning = this.applyReturning(q, $select)
@@ -1134,27 +1228,13 @@ export class KyselyAdapter<
       $select,
       buildWhere:
         dialectType === 'mysql' && onConflictFields.length > 0
-          ? (selected) => {
-              // For MySQL upserts, fetch records based on conflict fields
-              const dataArray = isArray ? (_data as Data[]) : [_data as Data]
-
-              // Build OR conditions for each data item
-              return selected.where((eb) =>
-                eb.or(
-                  dataArray.map((item) =>
-                    eb.and(
-                      onConflictFields.map((field) =>
-                        eb(
-                          this.col(field as string),
-                          '=',
-                          item[field as keyof Data],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+          ? (selected) =>
+              this.buildWhereForConflictFields(
+                selected,
+                _data,
+                onConflictFields,
+                isArray,
               )
-            }
           : undefined,
     })
 
