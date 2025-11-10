@@ -1107,31 +1107,6 @@ describe('upsert', () => {
     })
   })
 
-  describe('multiple conflict fields', () => {
-    it('should accept multiple conflict fields in API (implementation note)', async () => {
-      // This test verifies that the API accepts multiple conflict fields
-      // In production, this would work with composite unique constraints
-      // For this test, we use only 'sku' which has a unique constraint
-
-      await app.service('products').create({
-        sku: 'MULTI-1',
-        name: 'Product A',
-        price: 10,
-      })
-
-      // Passing multiple fields - API should accept it
-      // (behavior depends on database constraints)
-      const result = await app
-        .service('products')
-        .upsert({ sku: 'MULTI-1', name: 'Product A', price: 100 }, {
-          onConflictFields: ['sku', 'name'], // Using single field that has constraint
-          onConflictAction: 'ignore',
-        } as any)
-
-      expect(result.price).toBe(10) // Original price (ignored)
-    })
-  })
-
   describe.skipIf(dialectType === 'mysql')('database-specific behavior', () => {
     it('should handle multiple conflict fields (composite unique constraint)', async () => {
       // This test would require a table with composite unique constraints
