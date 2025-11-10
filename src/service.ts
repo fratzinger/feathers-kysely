@@ -8,7 +8,11 @@ import type {
   Params,
 } from '@feathersjs/feathers'
 import { KyselyAdapter } from './adapter.js'
-import type { KyselyAdapterParams, UpsertOptions } from './declarations.js'
+import type {
+  KyselyAdapterParams,
+  UpsertOptions,
+} from './declarations.js'
+import type { PaginatedOrArray } from "feathers-utils";
 
 export class KyselyService<
     Result extends Record<string, any> = Record<string, any>,
@@ -20,16 +24,13 @@ export class KyselyService<
   implements
     ServiceMethods<Result | Paginated<Result>, Data, ServiceParams, PatchData>
 {
-  async find(
-    params?: ServiceParams & { paginate?: PaginationOptions },
-  ): Promise<Paginated<Result>>
-  async find(params?: ServiceParams & { paginate: false }): Promise<Result[]>
-  async find(params?: ServiceParams): Promise<Paginated<Result> | Result[]>
-  async find(params?: ServiceParams): Promise<Paginated<Result> | Result[]> {
+  async find<
+    P extends ServiceParams & { paginate?: PaginationOptions | false },
+  >(params?: P): Promise<PaginatedOrArray<Result, P>> {
     return this._find({
       ...params,
       query: await this.sanitizeQuery(params),
-    } as any)
+    } as any) as any
   }
 
   async get(id: Id, params?: ServiceParams): Promise<Result> {

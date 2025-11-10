@@ -21,8 +21,8 @@ importers:
         specifier: ^5.0.35
         version: 5.0.35
       feathers-utils:
-        specifier: ^10.0.0-5
-        version: 10.0.0-5(@feathersjs/feathers@5.0.35)
+        specifier: ^10.0.0-7
+        version: 10.0.0-7(@feathersjs/feathers@5.0.35)
     devDependencies:
       '@feathers-community/eslint-config':
         specifier: ^0.0.8
@@ -1172,8 +1172,8 @@ packages:
     peerDependencies:
       '@feathersjs/feathers': ^5.0.0
 
-  feathers-utils@10.0.0-5:
-    resolution: {integrity: sha512-ZYmUbFkS1sNS38qq/klzIlzh+E09o3PzwVWJinggF7v8t6v+35mAl/EFo1KU4q8jskhgblm4L68J3LIUtnUW7w==}
+  feathers-utils@10.0.0-7:
+    resolution: {integrity: sha512-HqcWw2a3bCrzIXgUPogCKeVPT1tD90CV4nx+fAlA4kt3283CFcHOFkOQqzju0RRcBuq5bx1GRr3tdZPTQRmUUQ==}
     peerDependencies:
       '@feathersjs/feathers': ^5.0.0
 
@@ -3207,7 +3207,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  feathers-utils@10.0.0-5(@feathersjs/feathers@5.0.35):
+  feathers-utils@10.0.0-7(@feathersjs/feathers@5.0.35):
     dependencies:
       '@feathersjs/adapter-commons': 5.0.35
       '@feathersjs/errors': 5.0.35
