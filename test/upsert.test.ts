@@ -94,7 +94,6 @@ describe('upsert', () => {
 
       const result = await app.service('products').upsert(product, {
         onConflictFields: ['sku'],
-        onConflictAction: 'ignore',
       } as any)
 
       expect(result).toMatchObject({
@@ -749,6 +748,387 @@ describe('upsert', () => {
       expect(result).toHaveProperty('sku')
       expect(result).toHaveProperty('price')
       expect(result.price).toBe(150.0)
+    })
+  })
+
+  describe('error handling', () => {
+    it('should handle upsert without onConflictFields parameter', async () => {
+      // Should behave like regular insert
+      const result = await app
+        .service('products')
+        .upsert(
+          { sku: 'NO-CONFLICT-FIELD', name: 'Test', price: 10 },
+          {} as any,
+        )
+      expect(result).toHaveProperty('id')
+      expect(result.sku).toBe('NO-CONFLICT-FIELD')
+    })
+
+    it('should throw error on duplicate without conflict handling', async () => {
+      await app.service('products').create({
+        sku: 'DUP-ERROR',
+        name: 'Test',
+        price: 10,
+      })
+
+      await expect(
+        app
+          .service('products')
+          .upsert({ sku: 'DUP-ERROR', name: 'Test 2', price: 20 }, {} as any),
+      ).rejects.toThrow()
+    })
+  })
+
+  describe('data type handling', () => {
+    it('should handle upsert with zero values', async () => {
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'ZERO', name: 'Zero Product', price: 0, stock: 0 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+      expect(result.price).toBe(0)
+      expect(result.stock).toBe(0)
+    })
+
+    it('should handle upsert with negative numbers', async () => {
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'NEG', name: 'Negative', price: -10.5, stock: -5 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+      expect(result.price).toBe(-10.5)
+    })
+
+    it('should handle upsert with very large numbers', async () => {
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'LARGE', name: 'Large', price: 999999999.99 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+      // Use 0 decimal places for comparison due to 'real' type precision limits
+      expect(result.price).toBeCloseTo(999999999.99, 0)
+    })
+
+    it('should handle upsert with empty string', async () => {
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'EMPTY', name: '', price: 10, description: '' }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+      expect(result.name).toBe('')
+      expect(result.description).toBe('')
+    })
+
+    it('should handle upsert with special characters', async () => {
+      const result = await app.service('products').upsert(
+        {
+          sku: 'SPECIAL-123',
+          name: 'Test\'s "Product" & More',
+          price: 10,
+          description: 'Special chars: émojis 🚀',
+        },
+        { onConflictFields: ['sku'], onConflictAction: 'merge' } as any,
+      )
+      expect(result.name).toContain("Test's")
+      expect(result.description).toContain('🚀')
+    })
+  })
+
+  describe('mixed insert and update', () => {
+    it('should handle mixed new and existing records with ignore', async () => {
+      // Create some existing records
+      await app.service('products').create([
+        { sku: 'EXIST-1', name: 'Existing 1', price: 10 },
+        { sku: 'EXIST-3', name: 'Existing 3', price: 30 },
+      ])
+
+      // Upsert mix of new and existing
+      const results = await app.service('products').upsert(
+        [
+          { sku: 'EXIST-1', name: 'Updated 1', price: 100 }, // existing - should ignore
+          { sku: 'NEW-2', name: 'New 2', price: 200 }, // new - should insert
+          { sku: 'EXIST-3', name: 'Updated 3', price: 300 }, // existing - should ignore
+          { sku: 'NEW-4', name: 'New 4', price: 400 }, // new - should insert
+        ],
+        { onConflictFields: ['sku'], onConflictAction: 'ignore' } as any,
+      )
+
+      expect(results).toHaveLength(4)
+
+      // Check existing records kept original values
+      const exist1 = results.find((r) => r.sku === 'EXIST-1')
+      expect(exist1!.name).toBe('Existing 1')
+      expect(exist1!.price).toBe(10)
+
+      // Check new records were inserted
+      const new2 = results.find((r) => r.sku === 'NEW-2')
+      expect(new2!.name).toBe('New 2')
+      expect(new2!.price).toBe(200)
+    })
+
+    it('should handle mixed new and existing records with merge', async () => {
+      await app
+        .service('products')
+        .create([{ sku: 'MIX-1', name: 'Original 1', price: 10, stock: 100 }])
+
+      const results = await app.service('products').upsert(
+        [
+          { sku: 'MIX-1', name: 'Updated 1', price: 15, stock: 150 }, // update
+          { sku: 'MIX-2', name: 'New 2', price: 25, stock: 250 }, // insert
+        ],
+        { onConflictFields: ['sku'], onConflictAction: 'merge' } as any,
+      )
+
+      expect(results).toHaveLength(2)
+
+      const mix1 = results.find((r) => r.sku === 'MIX-1')
+      expect(mix1!.name).toBe('Updated 1')
+      expect(mix1!.price).toBe(15)
+
+      const mix2 = results.find((r) => r.sku === 'MIX-2')
+      expect(mix2!.id).toBeDefined()
+    })
+  })
+
+  describe('conflict field variations', () => {
+    it('should handle single conflict field on id column', async () => {
+      const created = await app.service('products').create({
+        sku: 'ID-TEST',
+        name: 'Original',
+        price: 10,
+      })
+
+      const result = await app
+        .service('products')
+        .upsert(
+          { id: created.id, sku: 'ID-TEST', name: 'Updated', price: 20 },
+          { onConflictFields: ['id'], onConflictAction: 'merge' } as any,
+        )
+
+      expect(result.id).toBe(created.id)
+      expect(result.name).toBe('Updated')
+    })
+
+    it('should not update conflict fields themselves', async () => {
+      await app.service('products').create({
+        sku: 'ORIG-SKU',
+        name: 'Original',
+        price: 10,
+      })
+
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'ORIG-SKU', name: 'Updated', price: 20 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+
+      // SKU should remain the same (it's the conflict field)
+      expect(result.sku).toBe('ORIG-SKU')
+      expect(result.name).toBe('Updated')
+    })
+  })
+
+  describe('merge fields edge cases', () => {
+    it('should handle empty onConflictMergeFields array', async () => {
+      await app.service('products').create({
+        sku: 'EMPTY-MERGE',
+        name: 'Original',
+        price: 10,
+        stock: 5,
+      })
+
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'EMPTY-MERGE', name: 'Updated', price: 20, stock: 10 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+          onConflictMergeFields: [],
+        } as any)
+
+      // Nothing should be updated (no fields to merge)
+      expect(result.name).toBe('Original')
+      expect(result.price).toBe(10)
+      expect(result.stock).toBe(5)
+    })
+
+    it('should handle overlapping merge and exclude fields', async () => {
+      await app.service('products').create({
+        sku: 'OVERLAP',
+        name: 'Original',
+        price: 10,
+        stock: 5,
+      })
+
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'OVERLAP', name: 'Updated', price: 20, stock: 10 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+          onConflictMergeFields: ['name', 'price', 'stock'],
+          onConflictExcludeFields: ['price'], // Exclude should win
+        } as any)
+
+      expect(result.name).toBe('Updated')
+      expect(result.price).toBe(10) // Should not be updated (excluded)
+      expect(result.stock).toBe(10)
+    })
+  })
+
+  describe('return value verification', () => {
+    it('should return correct IDs for bulk upsert', async () => {
+      const results = await app.service('products').upsert(
+        [
+          { sku: 'ID-1', name: 'Prod 1', price: 10 },
+          { sku: 'ID-2', name: 'Prod 2', price: 20 },
+          { sku: 'ID-3', name: 'Prod 3', price: 30 },
+        ],
+        { onConflictFields: ['sku'], onConflictAction: 'ignore' } as any,
+      )
+
+      // All should have unique IDs
+      const ids = results.map((r) => r.id)
+      const uniqueIds = new Set(ids)
+      expect(uniqueIds.size).toBe(3)
+    })
+
+    it('should preserve original IDs when using ignore', async () => {
+      const created = await app.service('products').create({
+        sku: 'PRESERVE-ID',
+        name: 'Original',
+        price: 10,
+      })
+
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'PRESERVE-ID', name: 'Updated', price: 20 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'ignore',
+        } as any)
+
+      expect(result.id).toBe(created.id)
+    })
+
+    it('should return all fields when $select is not specified', async () => {
+      const result = await app.service('products').upsert(
+        {
+          sku: 'ALL-FIELDS',
+          name: 'Test',
+          price: 10,
+          stock: 5,
+          description: 'Desc',
+        },
+        { onConflictFields: ['sku'], onConflictAction: 'merge' } as any,
+      )
+
+      expect(result).toHaveProperty('id')
+      expect(result).toHaveProperty('sku')
+      expect(result).toHaveProperty('name')
+      expect(result).toHaveProperty('price')
+      expect(result).toHaveProperty('stock')
+      expect(result).toHaveProperty('description')
+    })
+  })
+
+  describe('null handling variations', () => {
+    it('should update non-null to null', async () => {
+      await app.service('products').create({
+        sku: 'NULL-TEST',
+        name: 'Product',
+        price: 10,
+        stock: 5,
+        description: 'Has desc',
+      })
+
+      const result = await app.service('products').upsert(
+        {
+          sku: 'NULL-TEST',
+          name: 'Product',
+          price: 10,
+          stock: null,
+          description: null,
+        },
+        { onConflictFields: ['sku'], onConflictAction: 'merge' } as any,
+      )
+
+      expect(result.stock).toBeNull()
+      expect(result.description).toBeNull()
+    })
+
+    it('should handle all optional fields as null', async () => {
+      const result = await app.service('products').upsert(
+        {
+          sku: 'ALL-NULL',
+          name: 'Product',
+          price: 10,
+          stock: null,
+          description: null,
+        },
+        { onConflictFields: ['sku'], onConflictAction: 'merge' } as any,
+      )
+
+      expect(result.stock).toBeNull()
+      expect(result.description).toBeNull()
+    })
+  })
+
+  describe('performance tests', () => {
+    it('should handle upsert with very long strings', async () => {
+      const longString = 'A'.repeat(200) // Test near varchar limit
+
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'LONG-STR', name: longString, price: 10 }, {
+          onConflictFields: ['sku'],
+          onConflictAction: 'merge',
+        } as any)
+
+      expect(result.name).toBe(longString)
+    })
+
+    it('should handle upsert with maximum batch size', async () => {
+      const batch = Array.from({ length: 500 }, (_, i) => ({
+        sku: `BATCH-${i}`,
+        name: `Product ${i}`,
+        price: i * 10,
+      }))
+
+      const results = await app.service('products').upsert(batch, {
+        onConflictFields: ['sku'],
+        onConflictAction: 'ignore',
+      } as any)
+
+      expect(results).toHaveLength(500)
+      expect(results.every((r) => r.id)).toBe(true)
+    })
+  })
+
+  describe('multiple conflict fields', () => {
+    it('should accept multiple conflict fields in API (implementation note)', async () => {
+      // This test verifies that the API accepts multiple conflict fields
+      // In production, this would work with composite unique constraints
+      // For this test, we use only 'sku' which has a unique constraint
+
+      await app.service('products').create({
+        sku: 'MULTI-1',
+        name: 'Product A',
+        price: 10,
+      })
+
+      // Passing multiple fields - API should accept it
+      // (behavior depends on database constraints)
+      const result = await app
+        .service('products')
+        .upsert({ sku: 'MULTI-1', name: 'Product A', price: 100 }, {
+          onConflictFields: ['sku', 'name'], // Using single field that has constraint
+          onConflictAction: 'ignore',
+        } as any)
+
+      expect(result.price).toBe(10) // Original price (ignored)
     })
   })
 

@@ -1012,7 +1012,11 @@ export class KyselyAdapter<
     })
 
     if (fieldsToUpdate.length === 0) {
-      return query
+      // No fields to update, but we still need ON DUPLICATE KEY UPDATE
+      // to prevent errors. Use a dummy update (id = id)
+      return query.onDuplicateKeyUpdate({
+        [idField]: sql.ref(idField),
+      })
     }
 
     // Build the update set using VALUES() function for MySQL
@@ -1107,8 +1111,8 @@ export class KyselyAdapter<
       onConflictExcludeFields,
     } = options
 
-    if (onConflictMergeFields && onConflictMergeFields.length > 0) {
-      // Use explicitly specified merge fields
+    if (onConflictMergeFields !== undefined) {
+      // Explicitly specified merge fields (even if empty array)
       return onConflictMergeFields
         .filter(
           (field) =>
@@ -1238,9 +1242,25 @@ export class KyselyAdapter<
           : undefined,
     })
 
-    // When using onConflict with doNothing, if a conflict occurs, the returning clause
-    // won't return anything. We need to fetch the existing records in that case.
-    if (onConflictAction === 'ignore' && onConflictFields.length > 0) {
+    // When using onConflict with doNothing (either explicit ignore or merge with zero fields),
+    // if a conflict occurs, the returning clause won't return anything.
+    // We need to fetch the existing records in that case.
+    const fieldsToUpdate =
+      onConflictAction === 'merge'
+        ? this.getFieldsToUpdate({
+            data: _data,
+            isArray,
+            onConflictFields,
+            onConflictMergeFields,
+            onConflictExcludeFields,
+          })
+        : []
+
+    const effectivelyIgnored =
+      onConflictAction === 'ignore' ||
+      (onConflictAction === 'merge' && fieldsToUpdate.length === 0)
+
+    if (effectivelyIgnored && onConflictFields.length > 0) {
       if (dialectType === 'mysql') {
         // For MySQL, executeAndReturn already handled fetching based on conflict fields
         return response
