@@ -8,11 +8,8 @@ import type {
   Params,
 } from '@feathersjs/feathers'
 import { KyselyAdapter } from './adapter.js'
-import type {
-  KyselyAdapterParams,
-  UpsertOptions,
-} from './declarations.js'
-import type { PaginatedOrArray } from "feathers-utils";
+import type { KyselyAdapterParams, UpsertOptions } from './declarations.js'
+import type { PaginatedOrArray } from 'feathers-utils'
 
 export class KyselyService<
     Result extends Record<string, any> = Record<string, any>,
