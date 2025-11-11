@@ -1056,17 +1056,15 @@ export class KyselyAdapter<
       isArray,
     } = options
 
-    const conflictColumns = onConflictFields.map((field) =>
-      this.col(field as string),
-    )
-
     if (onConflictAction === 'ignore') {
-      return query.onConflict((oc) => oc.columns(conflictColumns).doNothing())
+      return query.onConflict((oc) =>
+        oc.columns(onConflictFields as string[]).doNothing(),
+      )
     }
 
     // onConflictAction === 'merge'
     return query.onConflict((oc) => {
-      const conflict = oc.columns(conflictColumns)
+      const conflict = oc.columns(onConflictFields as string[])
 
       const fieldsToUpdate = this.getFieldsToUpdate({
         data,
