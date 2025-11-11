@@ -64,6 +64,13 @@ function setup() {
       Model: db,
       name: 'products',
       multi: true,
+      properties: {
+        sku: { type: 'string' },
+        name: { type: 'string' },
+        price: { type: 'number' },
+        stock: { type: 'number' },
+        description: { type: 'string' },
+      },
     }),
   )
 
