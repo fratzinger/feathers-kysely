@@ -37,6 +37,7 @@ import {
   applySelectId,
   convertBooleansToNumbers,
   getOrderByModifier,
+  traverseJSON,
 } from './utils.js'
 import { addToQuery } from 'feathers-utils'
 
@@ -87,6 +88,9 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
   relations?: Record<string, Relation>
   // TODO
   properties?: Record<string, any>
+  getPropertyType?: (
+    property: string,
+  ) => 'json' | 'jsonb' | (string & {}) | undefined
 }
 
 type FilterQueryResult = {
@@ -552,6 +556,50 @@ export class KyselyAdapter<
     return subQueries.length === 0 ? undefined : eb.and(subQueries)
   }
 
+  private handleJson(
+    eb: ExpressionBuilder<any, any>,
+    queryKey: string,
+    queryProperty: any,
+  ) {
+    if (!this.options.getPropertyType) return
+
+    if (!queryKey.includes('.')) {
+      return
+    }
+
+    const parts = queryKey.split('.')
+
+    const type = this.options.getPropertyType(parts[0])
+
+    if (type !== 'json' && type !== 'jsonb') {
+      return
+    }
+
+    const column = traverseJSON(eb, this.col(parts[0]), parts.slice(1))
+
+    if (_.isObject(queryProperty)) {
+      const qs = []
+      // loop through OPERATORS and apply them
+      for (const operator in queryProperty) {
+        const value = queryProperty[operator]
+        const op = this.getOperator(operator, value)
+        if (!op) continue
+
+        qs.push(eb(column, op, this.transformOperatorValue(operator, value)))
+      }
+
+      if (qs.length) {
+        return eb.and(qs)
+      }
+
+      // no operators matched - do a simple equality check
+    }
+
+    const op = this.getOperator('$eq', queryProperty)
+    if (!op) return
+    return eb(column, op, queryProperty)
+  }
+
   private handleQueryPropertyNormal(
     eb: ExpressionBuilder<any, any>,
     queryKey: string,
@@ -736,6 +784,10 @@ export class KyselyAdapter<
     const belongsTo = this.handleBelongsTo(eb, queryKey, queryProperty)
 
     if (belongsTo) return belongsTo
+
+    const json = this.handleJson(eb, queryKey, queryProperty)
+
+    if (json) return json
 
     const normal = this.handleQueryPropertyNormal(
       eb,
