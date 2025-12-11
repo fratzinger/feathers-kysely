@@ -21,11 +21,16 @@ export function traverseJSON<DB, TB extends keyof DB>(
     throw new Unprocessable('Path must have at least one element')
   }
 
-  const result = sql`${sql.ref(column)}->${sql.raw(
-    path.map((item) => `'${item}'`).join('->'),
-  )}`
+  const accessor = path
+    .slice(0, -1)
+    .map((p) => `'${p}'`)
+    .join('->')
+  const finalKey = path[path.length - 1]
 
-  return result
+  if (accessor) {
+    return sql`${sql.ref(column)}->${sql.raw(accessor)}->>'${sql.raw(finalKey)}'`
+  }
+  return sql`${sql.ref(column)}->>'${sql.raw(finalKey)}'`
 }
 
 export function convertBooleansToNumbers<T>(data: T): T {

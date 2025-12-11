@@ -162,6 +162,33 @@ describe.skipIf(dialectName !== 'postgres')('postgres', () => {
       })
     })
 
+    it('jsonb $iLike', async () => {
+      const created = await app.service('postgres').create([
+        {
+          jsonb: { name: 'John' },
+        },
+        {
+          jsonb: { name: 'Test' },
+        },
+        {
+          jsonb: { name: 'Jo, test' },
+        },
+      ])
+
+      const queried = await app.service('postgres').find({
+        query: {
+          'jsonb.name': {
+            $iLike: 'Jo%',
+          },
+        },
+        paginate: false,
+      })
+
+      expect(queried).toHaveLength(2)
+      expect(queried[0].jsonb).toEqual({ name: 'John' })
+      expect(queried[1].jsonb).toEqual({ name: 'Jo, test' })
+    })
+
     it('query nested jsonb', async () => {
       const created = await app.service('postgres').create([
         {
