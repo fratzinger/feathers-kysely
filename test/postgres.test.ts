@@ -14,6 +14,7 @@ interface DB {
     intArr: number[]
     strArr: string[]
     jsonb: any
+    date: string
   }
 }
 
@@ -23,6 +24,7 @@ type Postgres = {
   intArr: number[]
   strArr: string[]
   jsonb: any
+  date: string
 }
 
 function setup() {
@@ -44,6 +46,7 @@ function setup() {
       .addColumn('intArr', sql`integer[]`)
       .addColumn('strArr', sql`varchar[]`)
       .addColumn('jsonb', 'jsonb')
+      .addColumn('date', 'date')
       .execute()
   }
 
@@ -56,6 +59,19 @@ function setup() {
       id: 'id',
       name: 'postgres',
       multi: true,
+      getPropertyType: (prop) => {
+        if (prop === 'jsonb') {
+          return 'jsonb'
+        }
+      },
+      properties: {
+        id: true,
+        str: true,
+        intArr: true,
+        strArr: true,
+        jsonb: true,
+        date: true,
+      },
     }),
   )
 
@@ -144,6 +160,60 @@ describe.skipIf(dialectName !== 'postgres')('postgres', () => {
       const patchedJson = await app.service('postgres').patch(created.id, {
         jsonb: [{ c: 3 }, { d: 4 }],
       })
+    })
+
+    it('jsonb $iLike', async () => {
+      const created = await app.service('postgres').create([
+        {
+          jsonb: { name: 'John' },
+        },
+        {
+          jsonb: { name: 'Test' },
+        },
+        {
+          jsonb: { name: 'Jo, test' },
+        },
+      ])
+
+      const queried = await app.service('postgres').find({
+        query: {
+          'jsonb.name': {
+            $iLike: 'Jo%',
+          },
+        },
+        paginate: false,
+      })
+
+      expect(queried).toHaveLength(2)
+      expect(queried[0].jsonb).toEqual({ name: 'John' })
+      expect(queried[1].jsonb).toEqual({ name: 'Jo, test' })
+    })
+
+    it('query nested jsonb', async () => {
+      const created = await app.service('postgres').create([
+        {
+          jsonb: { a: { b: { c: 1 } } },
+        },
+        {
+          jsonb: { a: { b: { c: 2 } } },
+        },
+        {
+          jsonb: { a: { b: { c: 3 } } },
+        },
+      ])
+
+      const queried = await app.service('postgres').find({
+        query: {
+          'jsonb.a.b.c': {
+            $gte: 2,
+          },
+        },
+        paginate: false,
+      })
+
+      expect(queried).toHaveLength(2)
+      expect(queried[0].jsonb).toEqual({ a: { b: { c: 2 } } })
+      expect(queried[1].jsonb).toEqual({ a: { b: { c: 3 } } })
     })
   })
 })

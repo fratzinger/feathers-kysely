@@ -1,9 +1,36 @@
-import type { OrderByItemBuilder } from 'kysely'
+import { sql } from 'kysely'
+import type {
+  OrderByItemBuilder,
+  ExpressionBuilder,
+  StringReference,
+} from 'kysely'
 import type { SortProperty } from './declarations.js'
+import { Unprocessable } from '@feathersjs/errors'
 
 export function applySelectId($select: string[] | undefined, idField: string) {
   if (!$select) return $select
   return $select.includes(idField) ? $select : $select.concat(idField)
+}
+
+export function traverseJSON<DB, TB extends keyof DB>(
+  eb: ExpressionBuilder<DB, TB>,
+  column: StringReference<DB, TB>,
+  path: string[],
+) {
+  if (!path.length) {
+    throw new Unprocessable('Path must have at least one element')
+  }
+
+  const accessor = path
+    .slice(0, -1)
+    .map((p) => `'${p}'`)
+    .join('->')
+  const finalKey = path[path.length - 1]
+
+  if (accessor) {
+    return sql`${sql.ref(column)}->${sql.raw(accessor)}->>'${sql.raw(finalKey)}'`
+  }
+  return sql`${sql.ref(column)}->>'${sql.raw(finalKey)}'`
 }
 
 export function convertBooleansToNumbers<T>(data: T): T {
