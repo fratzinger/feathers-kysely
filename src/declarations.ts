@@ -1,6 +1,44 @@
-import type { AdapterParams, AdapterQuery } from '@feathersjs/adapter-commons'
+import type {
+  AdapterParams,
+  AdapterQuery,
+  AdapterServiceOptions,
+} from '@feathersjs/adapter-commons'
+import type { ControlledTransaction, Kysely } from 'kysely'
 
 export type DialectType = 'mysql' | 'postgres' | 'sqlite' | 'mssql'
+
+type Relation = {
+  service: string
+  keyHere: string
+  keyThere: string
+  asArray: boolean
+  databaseTableName?: string
+}
+
+export interface KyselyAdapterOptions extends AdapterServiceOptions {
+  Model: Kysely<any>
+  /**
+   * The table name
+   */
+  name: string
+  dialectType?: DialectType
+  // TODO
+  relations?: Record<string, Relation>
+  // TODO
+  properties?: Record<string, any>
+  getPropertyType?: (
+    property: string,
+  ) => 'json' | 'jsonb' | (string & {}) | undefined
+}
+
+export interface KyselyAdapterTransaction {
+  trx: ControlledTransaction<any>
+  id?: number
+  starting: boolean
+  parent?: KyselyAdapterTransaction
+  committed?: Promise<boolean | undefined>
+  resolve?: (value: boolean) => void
+}
 
 export interface UpsertOptions<T = any> {
   /**
@@ -27,10 +65,10 @@ export interface UpsertOptions<T = any> {
   onConflictExcludeFields?: (keyof T)[]
 }
 
-// export interface KyselyAdapterParams<Q = AdapterQuery, DB extends Database = Database> extends AdapterParams<Q, Partial<KyselyAdapterOptions<DB>> {
-// }
-export type KyselyAdapterParams<Q extends AdapterQuery = AdapterQuery> =
-  AdapterParams<Q>
+export interface KyselyAdapterParams<Q extends AdapterQuery = AdapterQuery>
+  extends AdapterParams<Q, Partial<KyselyAdapterOptions>> {
+  transaction?: KyselyAdapterTransaction
+}
 
 export type SortProperty =
   | 1
