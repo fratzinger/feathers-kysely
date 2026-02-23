@@ -1,4 +1,5 @@
 export * from './declarations.js'
 export * from './adapter.js'
 export * from './error-handler.js'
+export * from './hooks.js'
 export * from './service.js'

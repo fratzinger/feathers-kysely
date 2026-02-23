@@ -10,7 +10,6 @@ import { _ } from '@feathersjs/commons'
 import type {
   PaginationOptions,
   AdapterQuery,
-  AdapterServiceOptions,
 } from '@feathersjs/adapter-commons'
 import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
 import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
@@ -18,6 +17,7 @@ import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
 import { errorHandler } from './error-handler.js'
 import type {
   DialectType,
+  KyselyAdapterOptions,
   KyselyAdapterParams,
   UpsertOptions,
 } from './declarations.js'
@@ -67,30 +67,6 @@ type Filter = (typeof FILTERS)[number]
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
   dialectType: DialectType
-}
-
-type Relation = {
-  service: string
-  keyHere: string
-  keyThere: string
-  asArray: boolean
-  databaseTableName?: string
-}
-
-export interface KyselyAdapterOptions extends AdapterServiceOptions {
-  Model: Kysely<any>
-  /**
-   * The table name
-   */
-  name: string
-  dialectType?: DialectType
-  // TODO
-  relations?: Record<string, Relation>
-  // TODO
-  properties?: Record<string, any>
-  getPropertyType?: (
-    property: string,
-  ) => 'json' | 'jsonb' | (string & {}) | undefined
 }
 
 type FilterQueryResult = {
@@ -199,6 +175,14 @@ export class KyselyAdapter<
     return Model
   }
 
+  db(params: ServiceParams = {} as ServiceParams): Kysely<any> {
+    const transaction = params.transaction
+    if (transaction?.trx) {
+      return transaction.trx
+    }
+    return this.getModel(params)
+  }
+
   filterQuery(params: ServiceParams, id?: NullableId): FilterQueryResult {
     const options = this.getOptions(params)
 
@@ -258,7 +242,7 @@ export class KyselyAdapter<
 
     // console.log('name', this.options.name)
 
-    let q = this.Model.selectFrom(this.options.name)
+    let q = this.db(params).selectFrom(this.options.name)
     const applyResult = this.applyJoins(q, filterQueryResult.params, {
       where: options?.where,
       order: options?.order,
@@ -888,7 +872,9 @@ export class KyselyAdapter<
 
     if (paginate && paginate.default) {
       const countQuery = this.composeQuery(params, {
-        select: [this.Model.fn.count(this.col(this.options.id)).as('total')],
+        select: [
+          this.db(params).fn.count(this.col(this.options.id)).as('total'),
+        ],
         where: true,
       })
 
@@ -948,13 +934,14 @@ export class KyselyAdapter<
     context: {
       isArray: boolean
       options: KyselyAdapterOptionsDefined
+      params: ServiceParams
       $select?: string[]
       buildWhere?: (
         query: SelectQueryBuilder<any, any, any>,
       ) => SelectQueryBuilder<any, any, any>
     },
   ) {
-    const { isArray, options, $select } = context
+    const { isArray, options, $select, params } = context
     const { id: idField, name, dialectType } = options
 
     const response = await (isArray && dialectType !== 'mysql'
@@ -967,7 +954,7 @@ export class KyselyAdapter<
 
     // mysql only
 
-    const from = this.Model.selectFrom(name)
+    const from = this.db(params).selectFrom(name)
     const select =
       $select && Array.isArray($select) ? this.col($select) : $select
     const selected = select ? from.select(select) : from.selectAll(name)
@@ -1206,9 +1193,9 @@ export class KyselyAdapter<
     const isArray = Array.isArray(_data)
     const $select = applySelectId(filters.$select, idField)
 
-    const q = this.Model.insertInto(name).values(
-      this.convertValues(_data) as any,
-    )
+    const q = this.db(params)
+      .insertInto(name)
+      .values(this.convertValues(_data) as any)
 
     const returning = this.applyReturning(q, $select)
 
@@ -1218,6 +1205,7 @@ export class KyselyAdapter<
     const response = await this.executeAndReturn(returning, {
       isArray,
       options,
+      params,
       $select,
     })
 
@@ -1252,7 +1240,9 @@ export class KyselyAdapter<
       onConflictExcludeFields = [],
     } = params
 
-    let q = this.Model.insertInto(name).values(this.convertValues(_data) as any)
+    let q = this.db(params)
+      .insertInto(name)
+      .values(this.convertValues(_data) as any)
 
     // Apply conflict resolution based on database dialect
     if (onConflictFields.length > 0) {
@@ -1279,6 +1269,7 @@ export class KyselyAdapter<
     const response = await this.executeAndReturn(returning, {
       isArray,
       options,
+      params,
       $select,
       buildWhere:
         dialectType === 'mysql' && onConflictFields.length > 0
@@ -1324,7 +1315,7 @@ export class KyselyAdapter<
           // Find which records were not inserted by comparing with input data
           if (responseArray.length < dataArray.length) {
             // Build a query to find the missing records
-            const from = this.Model.selectFrom(name)
+            const from = this.db(params).selectFrom(name)
             const select =
               $select && Array.isArray($select) ? this.col($select) : $select
             const selected = select ? from.select(select) : from.selectAll(name)
@@ -1365,7 +1356,7 @@ export class KyselyAdapter<
         } else {
           // For single record, if response is undefined/null, fetch the existing record
           if (!response) {
-            const from = this.Model.selectFrom(name)
+            const from = this.db(params).selectFrom(name)
             const select =
               $select && Array.isArray($select) ? this.col($select) : $select
             const selected = select ? from.select(select) : from.selectAll(name)
@@ -1505,7 +1496,9 @@ export class KyselyAdapter<
 
     const data = this.convertValues(_data)
 
-    const updateTable = this.Model.updateTable(name).set(_.omit(data, idField))
+    const updateTable = this.db(params)
+      .updateTable(name)
+      .set(_.omit(data, idField))
 
     const { q, buildWhere } = await this.getWhereForUpdateOrDelete(
       updateTable,
@@ -1524,6 +1517,7 @@ export class KyselyAdapter<
     const response = await this.executeAndReturn(q, {
       isArray: asMulti,
       options,
+      params,
       $select: filters.$select,
       buildWhere,
     })
@@ -1589,7 +1583,7 @@ export class KyselyAdapter<
 
     const isMulti = id === null
 
-    const deleteFrom = this.Model.deleteFrom(this.options.name)
+    const deleteFrom = this.db(params).deleteFrom(this.options.name)
 
     const { q, items: maybeItems } = await this.getWhereForUpdateOrDelete(
       deleteFrom,

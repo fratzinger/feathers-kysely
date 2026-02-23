@@ -216,6 +216,36 @@ describe('relations', () => {
     assert.ok(bob)
   })
 
+  it.skip('query for hasMany with multiple dot.notations', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+      { name: 'David', age: 28 },
+    ])
+
+    const createdTodos = await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+      { text: "Bob's second todo", userId: users[1].id },
+      { text: "David's only todo", userId: users[3].id },
+    ])
+
+    const usersWithTodos = await app.service('users').find({
+      query: {
+        'todos.text': { $like: '%todo%' },
+        'todos.userId': users[1].id,
+      },
+      paginate: false,
+    })
+    assert.strictEqual(usersWithTodos.length, 2)
+    const alice = usersWithTodos.find((u) => u.name === 'Alice')
+    const bob = usersWithTodos.find((u) => u.name === 'Bob')
+    assert.ok(alice)
+    assert.ok(bob)
+  })
+
   it('query for hasMany with nested notation 1', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
