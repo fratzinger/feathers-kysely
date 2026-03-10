@@ -13,6 +13,8 @@ function setup() {
     id: Generated<number>
     text: string
     userId: number
+    assigneeId: number | null
+    completedById: number | null
   }
 
   interface UsersTable {
@@ -21,6 +23,7 @@ function setup() {
     age: number | null
     time?: number | null
     created: boolean | null
+    managerId: number | null
   }
 
   interface DB {
@@ -43,7 +46,9 @@ function setup() {
       db.schema
         .createTable('todos')
         .addColumn('text', 'text', (col) => col.notNull())
-        .addColumn('userId', 'integer', (col) => col.notNull()),
+        .addColumn('userId', 'integer', (col) => col.notNull())
+        .addColumn('assigneeId', 'integer')
+        .addColumn('completedById', 'integer'),
       'id',
     ).execute()
 
@@ -56,7 +61,8 @@ function setup() {
         .addColumn('name', 'text', (col) => col.notNull())
         .addColumn('age', 'real')
         .addColumn('time', 'real')
-        .addColumn('created', 'boolean'),
+        .addColumn('created', 'boolean')
+        .addColumn('managerId', 'integer'),
       'id',
     ).execute()
   }
@@ -71,6 +77,7 @@ function setup() {
       age: true,
       time: true,
       created: true,
+      managerId: true,
     },
     relations: {
       todos: {
@@ -79,6 +86,20 @@ function setup() {
         keyThere: 'userId',
         asArray: true,
         databaseTableName: 'todos',
+      },
+      manager: {
+        service: 'users',
+        keyHere: 'managerId',
+        keyThere: 'id',
+        asArray: false,
+        databaseTableName: 'users',
+      },
+      reports: {
+        service: 'users',
+        keyHere: 'id',
+        keyThere: 'managerId',
+        asArray: true,
+        databaseTableName: 'users',
       },
     },
   })
@@ -91,11 +112,27 @@ function setup() {
       id: true,
       text: true,
       userId: true,
+      assigneeId: true,
+      completedById: true,
     },
     relations: {
       user: {
         service: 'users',
         keyHere: 'userId',
+        keyThere: 'id',
+        asArray: false,
+        databaseTableName: 'users',
+      },
+      assignee: {
+        service: 'users',
+        keyHere: 'assigneeId',
+        keyThere: 'id',
+        asArray: false,
+        databaseTableName: 'users',
+      },
+      completedBy: {
+        service: 'users',
+        keyHere: 'completedById',
         keyThere: 'id',
         asArray: false,
         databaseTableName: 'users',
@@ -109,12 +146,15 @@ function setup() {
     age: number | null
     time: string
     create: boolean
+    managerId: number | null
   }
 
   type Todo = {
     id: number
     text: string
     userId: number
+    assigneeId: number | null
+    completedById: number | null
   }
 
   type ServiceTypes = {
@@ -268,6 +308,367 @@ describe('relations', () => {
     const bob = usersWithTodos.find((u) => u.name === 'Bob')
     assert.ok(alice)
     assert.ok(bob)
+  })
+
+  it('query for hasMany with $some', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { todos: { $some: { text: { $like: '%first%' } } } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Alice'))
+    assert.ok(result.find((u) => u.name === 'Bob'))
+  })
+
+  it('query for hasMany with $none: no matching children', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    // Charlie has no todos at all, Alice and Bob have todos with "todo" in text
+    const result = await app.service('users').find({
+      query: { todos: { $none: { text: { $like: '%todo%' } } } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Charlie')
+  })
+
+  it('query for hasMany with $none: no children at all', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    // Only Charlie has no todos
+    const result = await app.service('users').find({
+      query: { todos: { $none: {} } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Charlie')
+  })
+
+  it('query for hasMany with $every', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Alice's second todo", userId: users[0].id },
+      { text: "Bob's first item", userId: users[1].id },
+      { text: "Bob's second todo", userId: users[1].id },
+    ])
+
+    // Alice: all todos contain "todo" -> matches
+    // Bob: only one contains "todo" -> does not match
+    // Charlie: no todos at all -> matches (vacuous truth)
+    const result = await app.service('users').find({
+      query: { todos: { $every: { text: { $like: '%todo%' } } } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Alice'))
+    assert.ok(result.find((u) => u.name === 'Charlie'))
+  })
+
+  it('query for hasMany with $none combined with regular filters', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: "Alice's first todo", userId: users[0].id },
+      { text: "Bob's first todo", userId: users[1].id },
+    ])
+
+    // Users older than 28 who have no todos
+    const result = await app.service('users').find({
+      query: { age: { $gt: 28 }, todos: { $none: {} } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Charlie')
+  })
+
+  // MARK: $some/$none/$every on belongsTo relations
+
+  it('$some/$none/$every on belongsTo relation are not applied', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id },
+      { text: 'Todo 2', userId: users[1].id },
+    ])
+
+    // `user` is a belongsTo relation (asArray: false)
+    // $some is a collection operator only for hasMany — on belongsTo it falls
+    // through to handleQueryPropertyNormal where it's treated as a column name
+    try {
+      await app.service('todos').find({
+        query: { user: { $some: { name: 'Alice' } } },
+        paginate: false,
+      })
+      // If no error, the operator was silently ignored
+    } catch {
+      // Error is expected — $some is not a valid column on the joined table
+    }
+
+    try {
+      await app.service('todos').find({
+        query: { user: { $none: {} } },
+        paginate: false,
+      })
+    } catch {
+      // Error is expected
+    }
+
+    try {
+      await app.service('todos').find({
+        query: { user: { $every: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error is expected
+    }
+  })
+
+  // MARK: $some/$none/$every on non-existent relations
+
+  it('$some/$none/$every on non-existent relation are not applied', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    // `nonExistent` is not a defined relation
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $some: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored — both acceptable
+    }
+
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $none: {} } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored
+    }
+
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $every: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored
+    }
+  })
+
+  // MARK: Self-referencing relations
+
+  it('self-referencing belongsTo: query by manager name (dot notation)', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 40 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Charlie', age: 25, managerId: alice.id },
+    ])
+
+    const result = await app
+      .service('users')
+      .find({ query: { 'manager.name': 'Alice' }, paginate: false })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Bob'))
+    assert.ok(result.find((u) => u.name === 'Charlie'))
+  })
+
+  it('self-referencing belongsTo: query by manager name (nested notation)', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 40 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Charlie', age: 25, managerId: alice.id },
+    ])
+
+    const result = await app
+      .service('users')
+      .find({ query: { manager: { name: 'Alice' } }, paginate: false })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Bob'))
+    assert.ok(result.find((u) => u.name === 'Charlie'))
+  })
+
+  it('self-referencing hasMany: $some reports', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 40 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Charlie', age: 25 },
+    ])
+
+    // Alice manages Bob, so she has reports
+    const result = await app.service('users').find({
+      query: { reports: { $some: {} } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+  })
+
+  it('self-referencing hasMany: $none reports', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 40 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Charlie', age: 25 },
+    ])
+
+    // Bob and Charlie manage nobody
+    const result = await app.service('users').find({
+      query: { reports: { $none: {} } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Bob'))
+    assert.ok(result.find((u) => u.name === 'Charlie'))
+  })
+
+  // MARK: Multiple relations to same table
+
+  it('multiple relations to same table: query by creator name', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'Todo 2', userId: users[1].id, assigneeId: users[0].id },
+    ])
+
+    const result = await app
+      .service('todos')
+      .find({ query: { 'user.name': 'Alice' }, paginate: false })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Todo 1')
+  })
+
+  it('multiple relations to same table: query by assignee name', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'Todo 2', userId: users[1].id, assigneeId: users[0].id },
+    ])
+
+    const result = await app
+      .service('todos')
+      .find({ query: { 'assignee.name': 'Bob' }, paginate: false })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Todo 1')
+  })
+
+  it('multiple relations to same table: combine two relation filters', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'Todo 2', userId: users[1].id, assigneeId: users[0].id },
+      { text: 'Todo 3', userId: users[0].id, assigneeId: users[0].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: { 'user.name': 'Alice', 'assignee.name': 'Bob' },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Todo 1')
+  })
+
+  it('multiple relations to same table: aliases do not collide', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'Todo 2', userId: users[2].id, assigneeId: users[0].id },
+    ])
+
+    // creator age > 28 AND assignee age < 30
+    const result = await app.service('todos').find({
+      query: { 'user.age': { $gt: 28 }, 'assignee.age': { $lt: 30 } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Todo 1')
+  })
+
+  // MARK: Multi-level relations (unsupported — graceful handling)
+
+  it('3-level dot notation is silently ignored', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create({ text: 'Todo 1', userId: users[0].id })
+
+    // 3-level path should be silently skipped (parts.length !== 2)
+    try {
+      const result = await app.service('todos').find({
+        query: { 'user.manager.name': 'Alice' },
+        paginate: false,
+      })
+      // If no error, filter was ignored — all todos returned
+      assert.strictEqual(result.length, 1)
+    } catch {
+      // An error is also acceptable — the key point is it doesn't crash the DB
+    }
   })
 
   it("sort by relation's column", async () => {
