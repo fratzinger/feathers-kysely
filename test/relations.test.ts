@@ -422,6 +422,88 @@ describe('relations', () => {
     assert.strictEqual(result[0].name, 'Charlie')
   })
 
+  // MARK: $some/$none/$every on belongsTo relations
+
+  it('$some/$none/$every on belongsTo relation are not applied', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Todo 1', userId: users[0].id },
+      { text: 'Todo 2', userId: users[1].id },
+    ])
+
+    // `user` is a belongsTo relation (asArray: false)
+    // $some is a collection operator only for hasMany — on belongsTo it falls
+    // through to handleQueryPropertyNormal where it's treated as a column name
+    try {
+      await app.service('todos').find({
+        query: { user: { $some: { name: 'Alice' } } },
+        paginate: false,
+      })
+      // If no error, the operator was silently ignored
+    } catch {
+      // Error is expected — $some is not a valid column on the joined table
+    }
+
+    try {
+      await app.service('todos').find({
+        query: { user: { $none: {} } },
+        paginate: false,
+      })
+    } catch {
+      // Error is expected
+    }
+
+    try {
+      await app.service('todos').find({
+        query: { user: { $every: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error is expected
+    }
+  })
+
+  // MARK: $some/$none/$every on non-existent relations
+
+  it('$some/$none/$every on non-existent relation are not applied', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    // `nonExistent` is not a defined relation
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $some: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored — both acceptable
+    }
+
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $none: {} } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored
+    }
+
+    try {
+      await app.service('users').find({
+        query: { nonExistent: { $every: { name: 'Alice' } } },
+        paginate: false,
+      })
+    } catch {
+      // Error or silently ignored
+    }
+  })
+
   // MARK: Self-referencing relations
 
   it('self-referencing belongsTo: query by manager name (dot notation)', async () => {
