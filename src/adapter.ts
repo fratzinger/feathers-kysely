@@ -135,7 +135,13 @@ export class KyselyAdapter<
         $and: (value: any) => value,
       },
       operators: [
-        ...new Set([...(options.operators ?? []), ...Object.keys(OPERATORS)]),
+        ...new Set([
+          ...(options.operators ?? []),
+          ...Object.keys(OPERATORS),
+          '$none',
+          '$some',
+          '$every',
+        ]),
       ],
     })
 
@@ -400,6 +406,55 @@ export class KyselyAdapter<
     return { q, query }
   }
 
+  private static readonly COLLECTION_OPERATORS = ['$none', '$some', '$every'] as const
+
+  private buildHasManyExists(
+    eb: ExpressionBuilder<any, any>,
+    relationKey: string,
+    relation: { databaseTableName?: string; keyHere: string; keyThere: string },
+    filterQuery: Record<string, any>,
+    operator: '$some' | '$none' | '$every' = '$some',
+  ) {
+    const subQueries: ExpressionWrapper<any, any, any>[] = []
+
+    for (const subKey in filterQuery) {
+      const subQuery = this.handleQueryProperty(
+        eb,
+        subKey,
+        filterQuery[subKey],
+        { tableName: relationKey },
+      )
+      if (subQuery) subQueries.push(subQuery)
+    }
+
+    // For $every, we negate the filter conditions:
+    // "every child matches X" = "no child exists that does NOT match X"
+    const filterConditions =
+      operator === '$every' && subQueries.length
+        ? [eb.not(eb.and(subQueries))]
+        : subQueries
+
+    const whereRef = eb
+      .selectFrom(`${relation.databaseTableName} as ${relationKey}`)
+      .select(sql`1` as any)
+      .where((eb) =>
+        eb.and([
+          eb(
+            `${relationKey}.${relation.keyThere}`,
+            '=',
+            eb.ref(this.col(relation.keyHere)),
+          ),
+          ...filterConditions,
+        ]),
+      )
+
+    // $some uses EXISTS, $none and $every use NOT EXISTS
+    if (operator === '$some') {
+      return eb.exists(whereRef)
+    }
+    return eb.not(eb.exists(whereRef))
+  }
+
   private handleHasMany(
     eb: ExpressionBuilder<any, any>,
     queryKey: string,
@@ -436,29 +491,59 @@ export class KyselyAdapter<
       return
     }
 
-    const subQueries: ExpressionWrapper<any, any, any>[] = []
-
     if (nested) {
+      const results: ExpressionWrapper<any, any, any>[] = []
+
+      // Separate collection operators ($none, $some, $every) from regular filters
+      const regularFilters: Record<string, any> = {}
+      const collectionOps = KyselyAdapter.COLLECTION_OPERATORS
+
       for (const subKey in queryProperty) {
-        const subQuery = this.handleQueryProperty(
-          eb,
-          subKey,
-          queryProperty[subKey],
-          { tableName: relationKey },
-        )
-        if (subQuery) subQueries.push(subQuery)
+        if (
+          collectionOps.includes(
+            subKey as (typeof collectionOps)[number],
+          )
+        ) {
+          const expr = this.buildHasManyExists(
+            eb,
+            relationKey,
+            relation,
+            queryProperty[subKey],
+            subKey as '$none' | '$some' | '$every',
+          )
+          results.push(expr)
+        } else {
+          regularFilters[subKey] = queryProperty[subKey]
+        }
       }
-    } else {
-      const nestedWhere = this.handleQueryPropertyNormal(
-        eb,
-        queryKey,
-        queryProperty,
-        {
-          tableName: relationKey,
-        },
-      )
-      if (nestedWhere) subQueries.push(nestedWhere)
+
+      // Regular filters without an explicit operator default to $some (backward-compatible)
+      if (Object.keys(regularFilters).length > 0) {
+        const expr = this.buildHasManyExists(
+          eb,
+          relationKey,
+          relation,
+          regularFilters,
+        )
+        results.push(expr)
+      }
+
+      if (results.length === 1) return results[0]
+      if (results.length > 1) return eb.and(results)
+      return undefined
     }
+
+    // Dot notation: always behaves as $some (backward-compatible)
+    const subQueries: ExpressionWrapper<any, any, any>[] = []
+    const nestedWhere = this.handleQueryPropertyNormal(
+      eb,
+      queryKey,
+      queryProperty,
+      {
+        tableName: relationKey,
+      },
+    )
+    if (nestedWhere) subQueries.push(nestedWhere)
 
     const whereRef = eb
       .selectFrom(`${relation.databaseTableName} as ${relationKey}`)
