@@ -10,7 +10,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git://github.com/fratzinger/feathers-kysely.git"
+    "url": "git+https://github.com/fratzinger/feathers-kysely.git"
   },
   "author": {
     "name": "Frederik Schmatz"
