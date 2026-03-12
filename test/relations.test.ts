@@ -691,4 +691,356 @@ describe('relations', () => {
     assert.strictEqual(todos.length, 3)
     assert.strictEqual(todos[0].userId, users[1].id)
   })
+
+  // MARK: hasMany sort
+
+  it('sort by hasMany relation column ascending (MIN)', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Z-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[0].id },
+      { text: 'M-todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Alice has MIN(text)='A-todo', Bob has MIN(text)='M-todo' → Alice first
+    assert.strictEqual(result[0].name, 'Alice')
+    assert.strictEqual(result[1].name, 'Bob')
+  })
+
+  it('sort by hasMany relation column descending (MAX)', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Z-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[0].id },
+      { text: 'M-todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': -1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Alice has MAX(text)='Z-todo', Bob has MAX(text)='M-todo' → Alice first (desc)
+    assert.strictEqual(result[0].name, 'Alice')
+    assert.strictEqual(result[1].name, 'Bob')
+  })
+
+  it('sort by hasMany with filter (extended form)', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Z-important', userId: users[0].id, assigneeId: 1 },
+      { text: 'A-other', userId: users[0].id, assigneeId: 2 },
+      { text: 'B-important', userId: users[1].id, assigneeId: 1 },
+    ])
+
+    // Sort by todos.text ascending, but only consider todos where assigneeId = 1
+    const result = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: 1 } },
+        } as any,
+      },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Alice: MIN(text where assigneeId=1) = 'Z-important'
+    // Bob: MIN(text where assigneeId=1) = 'B-important'
+    // 'B-important' < 'Z-important' → Bob first
+    assert.strictEqual(result[0].name, 'Bob')
+    assert.strictEqual(result[1].name, 'Alice')
+  })
+
+  it('sort by hasMany combined with regular sort', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'C-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1, name: 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Bob has MIN(text)='A-todo', Alice has MIN(text)='C-todo' → Bob first
+    assert.strictEqual(result[0].name, 'Bob')
+    assert.strictEqual(result[1].name, 'Alice')
+  })
+
+  it('hasMany sort does not duplicate rows', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    // Alice has 5 todos, Bob has 1
+    await app.service('todos').create([
+      { text: 'A1', userId: users[0].id },
+      { text: 'A2', userId: users[0].id },
+      { text: 'A3', userId: users[0].id },
+      { text: 'A4', userId: users[0].id },
+      { text: 'A5', userId: users[0].id },
+      { text: 'B1', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: false,
+    })
+
+    // Must return exactly 2 users, not 6 (JOIN would duplicate)
+    assert.strictEqual(result.length, 2)
+  })
+
+  it('hasMany sort with users that have no related records', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    // Only Alice and Bob have todos, Charlie has none
+    await app.service('todos').create([
+      { text: 'B-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 3)
+    // Users with todos should be sorted; Charlie (NULL) position is dialect-dependent
+    // but all 3 users must be present
+    const names = result.map((u: any) => u.name)
+    assert.ok(names.includes('Alice'))
+    assert.ok(names.includes('Bob'))
+    assert.ok(names.includes('Charlie'))
+  })
+
+  it('hasMany sort with filter excludes non-matching related records from sort', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    // Alice: assigneeId=1 → 'Z-task', assigneeId=2 → 'A-task'
+    // Bob: assigneeId=1 → 'B-task'
+    await app.service('todos').create([
+      { text: 'Z-task', userId: users[0].id, assigneeId: 1 },
+      { text: 'A-task', userId: users[0].id, assigneeId: 2 },
+      { text: 'B-task', userId: users[1].id, assigneeId: 1 },
+    ])
+
+    // Without filter: Alice MIN='A-task' < Bob MIN='B-task' → Alice first
+    const withoutFilter = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: false,
+    })
+    assert.strictEqual(withoutFilter[0].name, 'Alice')
+
+    // With filter assigneeId=1: Alice MIN='Z-task' > Bob MIN='B-task' → Bob first
+    const withFilter = await app.service('users').find({
+      query: {
+        $sort: { 'todos.text': { direction: 1, filter: { assigneeId: 1 } } } as any,
+      },
+      paginate: false,
+    })
+    assert.strictEqual((withFilter as any[])[0].name, 'Bob')
+    assert.strictEqual((withFilter as any[])[1].name, 'Alice')
+  })
+
+  it('hasMany sort with filter where no records match filter', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'A-todo', userId: users[0].id, assigneeId: 1 },
+      { text: 'B-todo', userId: users[1].id, assigneeId: 1 },
+    ])
+
+    // Filter by assigneeId=999 which matches nothing → all NULLs
+    const result = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: 999 } },
+        } as any,
+      },
+      paginate: false,
+    })
+
+    // Both users returned, both have NULL sort value
+    assert.strictEqual(result.length, 2)
+  })
+
+  it('hasMany sort descending with filter', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'X-task', userId: users[0].id, assigneeId: 1 },
+      { text: 'A-task', userId: users[0].id, assigneeId: 1 },
+      { text: 'M-task', userId: users[1].id, assigneeId: 1 },
+    ])
+
+    // DESC uses MAX: Alice MAX='X-task', Bob MAX='M-task' → Alice first
+    const result = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: -1, filter: { assigneeId: 1 } },
+        } as any,
+      },
+      paginate: false,
+    })
+
+    assert.strictEqual(result[0].name, 'Alice')
+    assert.strictEqual(result[1].name, 'Bob')
+  })
+
+  it('hasMany sort combined with where filter on same relation', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'C-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[1].id },
+    ])
+    // Charlie has no todos
+
+    // Filter to only users who have todos, then sort by todo text
+    const result = await app.service('users').find({
+      query: {
+        todos: { $some: {} },
+        $sort: { 'todos.text': 1 },
+      },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    assert.strictEqual(result[0].name, 'Bob') // A-todo
+    assert.strictEqual(result[1].name, 'Alice') // C-todo
+  })
+
+  it('hasMany sort on self-referencing relation', async () => {
+    const boss = await app.service('users').create({ name: 'Boss', age: 50 })
+    await app.service('users').create([
+      { name: 'Zara', age: 25, managerId: boss.id },
+      { name: 'Aaron', age: 30, managerId: boss.id },
+    ])
+    await app.service('users').create({ name: 'Lone', age: 40 })
+
+    // Sort by reports' names ascending (MIN)
+    const result = await app.service('users').find({
+      query: { $sort: { 'reports.name': 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 4)
+    // Boss has MIN(reports.name)='Aaron', others have NULL
+    // Boss should appear among the results with non-null sort value
+    const bossIdx = result.findIndex((u: any) => u.name === 'Boss')
+    assert.ok(bossIdx >= 0, 'Boss should be in results')
+  })
+
+  it('hasMany sort with multiple sort keys on different relations', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Same', userId: users[0].id },
+      { text: 'Same', userId: users[1].id },
+    ])
+
+    // Both have same todo text, tiebreak by age
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1, age: 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Same MIN(text), so tiebreak by age asc → Bob (25) first
+    assert.strictEqual(result[0].name, 'Bob')
+    assert.strictEqual(result[1].name, 'Alice')
+  })
+
+  it('hasMany sort with extended direction strings', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Z-todo', userId: users[0].id },
+      { text: 'A-todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 'asc' } as any },
+      paginate: false,
+    })
+
+    const res = result as any[]
+    assert.strictEqual(res.length, 2)
+    // Bob MIN='A-todo' < Alice MIN='Z-todo' → Bob first
+    assert.strictEqual(res[0].name, 'Bob')
+    assert.strictEqual(res[1].name, 'Alice')
+  })
+
+  it('belongsTo sort still uses JOIN (not subquery)', async () => {
+    const users = await app.service('users').create([
+      { name: 'Zara', age: 30 },
+      { name: 'Aaron', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'First', userId: users[0].id },
+      { text: 'Second', userId: users[1].id },
+    ])
+
+    // belongsTo sort (user.name on todos) should still work via JOIN
+    const result = await app.service('todos').find({
+      query: { $sort: { 'user.name': 1 } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
+    // Aaron (user) first
+    assert.strictEqual(result[0].userId, users[1].id)
+    assert.strictEqual(result[1].userId, users[0].id)
+  })
 })

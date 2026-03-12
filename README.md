@@ -181,6 +181,103 @@ try {
 
 Nested transactions (savepoints) are supported by passing a transaction's `trx` to `startTransaction()` again.
 
+## Relations
+
+Define relations between services to enable powerful query operators and sorting across related tables.
+
+### Configuration
+
+```ts
+const app = feathers().use(
+  "users",
+  new KyselyService<User>({
+    Model: db,
+    name: "users",
+    id: "id",
+    relations: {
+      todos: {
+        service: "todos",
+        keyHere: "id",
+        keyThere: "userId",
+        asArray: true,
+        databaseTableName: "todos",
+      },
+      manager: {
+        service: "users",
+        keyHere: "managerId",
+        keyThere: "id",
+        asArray: false,
+        databaseTableName: "users",
+      },
+    },
+  }),
+);
+```
+
+| Relation Option     | Type      | Description                                                |
+| ------------------- | --------- | ---------------------------------------------------------- |
+| `service`           | `string`  | The name of the related Feathers service                   |
+| `keyHere`           | `string`  | The local column that references the related table         |
+| `keyThere`          | `string`  | The column in the related table that matches `keyHere`     |
+| `asArray`           | `boolean` | `true` for hasMany (one-to-many), `false` for belongsTo   |
+| `databaseTableName` | `string`  | The actual database table name of the related entity       |
+
+### Filtering with `$none`, `$some`, `$every`
+
+For `asArray: true` (hasMany) relations, you can filter parent records based on conditions on their children:
+
+- **`$some`** — at least one related record matches the filter
+- **`$none`** — no related record matches the filter
+- **`$every`** — all related records match the filter
+
+```ts
+// Users who have at least one todo with text 'A-todo'
+await app.service("users").find({
+  query: { todos: { $some: { text: "A-todo" } } },
+});
+
+// Users who have no completed todos
+await app.service("users").find({
+  query: { todos: { $none: { completed: true } } },
+});
+
+// Users where every todo is completed
+await app.service("users").find({
+  query: { todos: { $every: { completed: true } } },
+});
+```
+
+### Sorting by hasMany Relations
+
+You can sort parent records by a column in a hasMany relation using dot notation in `$sort`. The adapter uses a subquery with `MIN()` (ascending) or `MAX()` (descending) to aggregate the related values without duplicating rows.
+
+```ts
+// Sort users by the MIN of their todos' text (ascending)
+await app.service("users").find({
+  query: { $sort: { "todos.text": 1 } },
+});
+
+// Sort users by the MAX of their todos' text (descending)
+await app.service("users").find({
+  query: { $sort: { "todos.text": -1 } },
+});
+```
+
+You can also filter which related records are considered for sorting by using the extended form:
+
+```ts
+// Sort users by the MIN text of only their todos assigned to user 1
+await app.service("users").find({
+  query: {
+    $sort: {
+      "todos.text": { direction: 1, filter: { assigneeId: 1 } },
+    },
+  },
+});
+```
+
+All standard sort directions are supported: `1`, `-1`, `'asc'`, `'desc'`, `'asc nulls first'`, `'asc nulls last'`, `'desc nulls first'`, `'desc nulls last'`.
+
 ## Custom Queries
 
 The underlying Kysely instance is available at `service.Model`. Note that it is the full `Kysely` instance, not scoped to a table — so provide the table name in each query:
