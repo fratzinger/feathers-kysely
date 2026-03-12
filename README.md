@@ -16,7 +16,7 @@ npm install @fratzinger/feathers-kysely kysely
 
 ## Documentation
 
-[Read the full documentation](https://feathers-kysely.pages.dev/)
+[Read the full documentation](https://feathers-kysely.fratzinger.workers.dev/)
 
 ## License
 
