@@ -4,7 +4,7 @@ import type {
   ExpressionBuilder,
   StringReference,
 } from 'kysely'
-import type { SortProperty } from './declarations.js'
+import type { SortDirection, SortProperty } from './declarations.js'
 import { Unprocessable } from '@feathersjs/errors'
 
 export function applySelectId($select: string[] | undefined, idField: string) {
@@ -83,23 +83,31 @@ export function convertBooleansToNumbers<T>(data: T): T {
   return modified ? result : data
 }
 
+export function getSortDirection(order: SortProperty): SortDirection {
+  if (typeof order === 'object' && order !== null && 'direction' in order) {
+    return order.direction
+  }
+  return order
+}
+
 export function getOrderByModifier(order: SortProperty) {
-  if (order === 1 || order === '-1' || order === 'asc') {
+  const dir = getSortDirection(order)
+  if (dir === 1 || dir === '-1' || dir === 'asc') {
     return (ob: OrderByItemBuilder) => ob.asc()
   }
-  if (order === -1 || order === '1' || order === 'desc') {
+  if (dir === -1 || dir === '1' || dir === 'desc') {
     return (ob: OrderByItemBuilder) => ob.desc()
   }
-  if (order === 'asc nulls first') {
+  if (dir === 'asc nulls first') {
     return (ob: OrderByItemBuilder) => ob.asc().nullsFirst()
   }
-  if (order === 'asc nulls last') {
+  if (dir === 'asc nulls last') {
     return (ob: OrderByItemBuilder) => ob.asc().nullsLast()
   }
-  if (order === 'desc nulls first') {
+  if (dir === 'desc nulls first') {
     return (ob: OrderByItemBuilder) => ob.desc().nullsFirst()
   }
-  if (order === 'desc nulls last') {
+  if (dir === 'desc nulls last') {
     return (ob: OrderByItemBuilder) => ob.desc().nullsLast()
   }
   return (ob: OrderByItemBuilder) => ob.asc()

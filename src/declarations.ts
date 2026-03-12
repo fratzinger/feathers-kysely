@@ -70,7 +70,7 @@ export interface KyselyAdapterParams<Q extends AdapterQuery = AdapterQuery>
   transaction?: KyselyAdapterTransaction
 }
 
-export type SortProperty =
+export type SortDirection =
   | 1
   | -1
   // eslint-disable-next-line prettier/prettier
@@ -83,6 +83,10 @@ export type SortProperty =
   | 'asc nulls last'
   | 'desc nulls first'
   | 'desc nulls last'
+
+export type SortProperty =
+  | SortDirection
+  | { direction: SortDirection; filter?: Record<string, any> }
 
 export type SortFilter = Record<string, SortProperty>
 

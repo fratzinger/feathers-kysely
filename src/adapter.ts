@@ -37,6 +37,7 @@ import {
   applySelectId,
   convertBooleansToNumbers,
   getOrderByModifier,
+  getSortDirection,
   traverseJSON,
 } from './utils.js'
 import { addToQuery } from 'feathers-utils'
@@ -406,7 +407,11 @@ export class KyselyAdapter<
     return { q, query }
   }
 
-  private static readonly COLLECTION_OPERATORS = ['$none', '$some', '$every'] as const
+  private static readonly COLLECTION_OPERATORS = [
+    '$none',
+    '$some',
+    '$every',
+  ] as const
 
   private buildHasManyExists(
     eb: ExpressionBuilder<any, any>,
@@ -499,11 +504,7 @@ export class KyselyAdapter<
       const collectionOps = KyselyAdapter.COLLECTION_OPERATORS
 
       for (const subKey in queryProperty) {
-        if (
-          collectionOps.includes(
-            subKey as (typeof collectionOps)[number],
-          )
-        ) {
+        if (collectionOps.includes(subKey as (typeof collectionOps)[number])) {
           const expr = this.buildHasManyExists(
             eb,
             relationKey,
@@ -897,10 +898,54 @@ export class KyselyAdapter<
 
     for (const key in filters.$sort) {
       const value = filters.$sort[key]
+
+      // Check if this is a hasMany relation sort (e.g. 'todos.text')
+      if (key.includes('.') && this.options.relations) {
+        const [relationKey, ...columnParts] = key.split('.')
+        const column = columnParts.join('.')
+        const relation = this.options.relations[relationKey]
+
+        if (relation?.databaseTableName && relation.asArray) {
+          const dir = getSortDirection(value)
+          const filter =
+            typeof value === 'object' && value !== null && 'filter' in value
+              ? (value as { direction: any; filter?: Record<string, any> })
+                  .filter
+              : undefined
+
+          // Use MIN for ascending, MAX for descending
+          const isAsc =
+            dir === 1 ||
+            dir === '-1' ||
+            dir === 'asc' ||
+            dir === 'asc nulls first' ||
+            dir === 'asc nulls last'
+          const aggFn = isAsc ? 'MIN' : 'MAX'
+
+          const subquery = sql`(SELECT ${sql.raw(aggFn)}(${sql.ref(`${relationKey}.${column}`)}) FROM ${sql.table(relation.databaseTableName)} AS ${sql.ref(relationKey)} WHERE ${sql.ref(`${relationKey}.${relation.keyThere}`)} = ${sql.ref(`${this.options.name}.${relation.keyHere}`)}${filter ? this.buildHasManySortFilter(relationKey, filter) : sql.raw('')})`
+
+          q = q.orderBy(subquery, getOrderByModifier(value)) as any
+          continue
+        }
+      }
+
       q = q.orderBy(this.col(key), getOrderByModifier(value)) as any
     }
 
     return q
+  }
+
+  private buildHasManySortFilter(
+    relationKey: string,
+    filter: Record<string, any>,
+  ) {
+    const conditions: ReturnType<typeof sql>[] = []
+    for (const key in filter) {
+      conditions.push(
+        sql` AND ${sql.ref(`${relationKey}.${key}`)} = ${filter[key]}`,
+      )
+    }
+    return sql.join(conditions, sql.raw(''))
   }
 
   /**
