@@ -4,6 +4,12 @@
     "resolveJsonModule": true,
     "types": ["vitest/globals"]
   },
-  "include": ["src/**/*", "test/**/*", "vite.config.ts", "tsup.config.ts"],
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "vite.config.ts",
+    "tsup.config.ts",
+    "docs/.vitepress/**/*"
+  ],
   "exclude": ["node_modules"]
 }
