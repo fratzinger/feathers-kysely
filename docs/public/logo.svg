@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Feather quill with a database-cylinder nib -->
+  <defs>
+    <linearGradient id="feather" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6C5CE7"/>
+      <stop offset="100%" stop-color="#0984E3"/>
+    </linearGradient>
+    <linearGradient id="shaft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0984E3"/>
+      <stop offset="100%" stop-color="#00B894"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Feather vanes - left side -->
+  <path d="M38 18 C28 32, 22 50, 30 62 Q40 48, 48 34Z" fill="url(#feather)" opacity="0.85"/>
+  <path d="M30 38 C20 52, 16 68, 26 78 Q36 64, 44 50Z" fill="url(#feather)" opacity="0.7"/>
+  <path d="M24 56 C16 70, 14 84, 24 92 Q34 78, 40 66Z" fill="url(#feather)" opacity="0.55"/>
+
+  <!-- Feather vanes - right side -->
+  <path d="M58 18 C68 32, 74 50, 66 62 Q56 48, 48 34Z" fill="url(#feather)" opacity="0.85"/>
+  <path d="M66 38 C76 52, 80 68, 70 78 Q60 64, 52 50Z" fill="url(#feather)" opacity="0.7"/>
+  <path d="M72 56 C80 70, 82 84, 72 92 Q62 78, 56 66Z" fill="url(#feather)" opacity="0.55"/>
+
+  <!-- Central shaft -->
+  <line x1="48" y1="16" x2="48" y2="96" stroke="url(#shaft)" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Database cylinder at the tip (nib) -->
+  <ellipse cx="48" cy="96" rx="16" ry="5" fill="#00B894"/>
+  <rect x="32" y="96" width="32" height="18" fill="#00B894"/>
+  <ellipse cx="48" cy="114" rx="16" ry="5" fill="#00997A"/>
+  <ellipse cx="48" cy="96" rx="16" ry="5" fill="#00D9A3" opacity="0.6"/>
+  <!-- Middle ellipse line on cylinder -->
+  <ellipse cx="48" cy="105" rx="16" ry="4.5" fill="none" stroke="#00997A" stroke-width="1" opacity="0.7"/>
+</svg>

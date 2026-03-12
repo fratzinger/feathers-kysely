@@ -38,3 +38,7 @@ dist/
 .cache
 
 .env
+
+# VitePress
+docs/.vitepress/cache
+docs/.vitepress/dist

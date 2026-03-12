@@ -46,7 +46,10 @@
     "version": "pnpm build",
     "test": "vitest run",
     "lint": "eslint",
-    "vitest": "vitest"
+    "vitest": "vitest",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
     "@feathersjs/adapter-commons": "^5.0.37",
@@ -73,6 +76,7 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.2",
+    "vitepress": "^1.6.4",
     "vitest": "^4.0.8"
   },
   "peerDependencies": {
