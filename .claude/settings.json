@@ -1,5 +1,13 @@
 {
   "permissions": {
-    "allow": ["WebSearch", "Bash(npx vitest *)"]
+    "allow": [
+      "WebSearch",
+      "Bash(npx vitest *)",
+      "WebFetch(domain:github.com)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm docs:build)"
+    ]
   }
 }
