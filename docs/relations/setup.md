@@ -69,10 +69,32 @@ See [hasMany](./has-many) for details.
 
 ## App Setup
 
-If you plan to query or sort by [multi-level belongsTo chains](./belongs-to#multi-level-chains) (e.g. `event.assignment.customer.fullName`), make sure `app.setup()` runs before the first query. Feathers calls it automatically when you start the server via `app.listen()`. In tests or programmatic usage without `listen()`, invoke it explicitly:
+If you plan to query or sort by [multi-level belongsTo chains](./belongs-to#multi-level-chains) (e.g. `event.assignment.customer.fullName`), the adapter needs a reference to the Feathers app so it can resolve relation definitions on _other_ services. There are two ways to provide it:
+
+### 1. Automatic (via `app.setup()`)
+
+Feathers calls `service.setup(app, path)` automatically when you start the server with `app.listen()`. In tests or programmatic usage without `listen()`, invoke it explicitly:
 
 ```ts
 await app.setup();
 ```
 
-This is how the adapter discovers the relation definitions of _other_ services when resolving a chained path. Single-level queries work without it.
+### 2. Explicit (via the constructor)
+
+You can pass the app as a second constructor argument — useful in tests or when you want the adapter fully wired before the Feathers lifecycle runs:
+
+```ts
+const events = new KyselyService<Event>(
+  {
+    Model: db,
+    name: "events",
+    relations: {
+      /* ... */
+    },
+  },
+  app,
+);
+app.use("events", events);
+```
+
+If both are provided, the constructor argument takes precedence. Single-level queries work without either.
