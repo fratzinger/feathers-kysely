@@ -5,7 +5,7 @@ import { feathers } from '@feathersjs/feathers'
 import dialect from './dialect.js'
 
 import { KyselyService } from '../src/index.js'
-import { describe, it } from 'vitest'
+import { beforeAll, describe, it } from 'vitest'
 import { addPrimaryKey } from './test-utils.js'
 
 function setup() {
@@ -169,6 +169,7 @@ function setup() {
 const { app, db, clean } = setup()
 
 describe('relations', () => {
+  beforeAll(() => app.setup())
   beforeEach(clean)
 
   afterAll(() => db.destroy())
@@ -325,6 +326,38 @@ describe('relations', () => {
 
     const result = await app.service('users').find({
       query: { todos: { $some: { text: { $like: '%first%' } } } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+    assert.ok(result.find((u) => u.name === 'Alice'))
+    assert.ok(result.find((u) => u.name === 'Bob'))
+  })
+
+  it('query for hasMany with $some and $or', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 25 },
+      { name: 'Charlie', age: 35 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'urgent task', userId: users[0].id },
+      { text: 'normal todo', userId: users[1].id },
+      { text: 'boring note', userId: users[2].id },
+    ])
+
+    // Users who have a todo with text matching 'urgent' OR 'todo'
+    const result = await app.service('users').find({
+      query: {
+        todos: {
+          $some: {
+            $or: [
+              { text: { $like: '%urgent%' } },
+              { text: { $like: '%todo%' } },
+            ],
+          },
+        },
+      },
       paginate: false,
     })
     assert.strictEqual(result.length, 2)
@@ -648,27 +681,172 @@ describe('relations', () => {
     assert.strictEqual(result[0].text, 'Todo 1')
   })
 
-  // MARK: Multi-level relations (unsupported — graceful handling)
+  // MARK: Multi-level belongsTo
 
-  it('3-level dot notation is silently ignored', async () => {
-    const users = await app.service('users').create([
-      { name: 'Alice', age: 30 },
-      { name: 'Bob', age: 25 },
+  it('3-level dot notation filters through chained belongsTo', async () => {
+    const managers = await app
+      .service('users')
+      .create([{ name: 'Manager-A' }, { name: 'Manager-B' }])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Bob', managerId: managers[1].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Bob todo', userId: workers[1].id },
     ])
 
-    await app.service('todos').create({ text: 'Todo 1', userId: users[0].id })
+    const result = await app.service('todos').find({
+      query: { 'user.manager.name': 'Manager-A' },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Alice todo')
+  })
 
-    // 3-level path should be silently skipped (parts.length !== 2)
-    try {
-      const result = await app.service('todos').find({
-        query: { 'user.manager.name': 'Alice' },
-        paginate: false,
-      })
-      // If no error, filter was ignored — all todos returned
-      assert.strictEqual(result.length, 1)
-    } catch {
-      // An error is also acceptable — the key point is it doesn't crash the DB
-    }
+  it('3-level nested notation produces the same result as dot notation', async () => {
+    const managers = await app
+      .service('users')
+      .create([{ name: 'Manager-A' }, { name: 'Manager-B' }])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Bob', managerId: managers[1].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Bob todo', userId: workers[1].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: { user: { manager: { name: 'Manager-B' } } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Bob todo')
+  })
+
+  it('3-level belongsTo with operator ($gt)', async () => {
+    const managers = await app.service('users').create([
+      { name: 'Manager-Old', age: 55 },
+      { name: 'Manager-Young', age: 30 },
+    ])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Bob', managerId: managers[1].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Bob todo', userId: workers[1].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: { 'user.manager.age': { $gt: 40 } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Alice todo')
+  })
+
+  it('3-level combined with 1-level sharing the same relation prefix', async () => {
+    const managers = await app.service('users').create([{ name: 'Manager-A' }])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Alicia', managerId: managers[0].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Alicia todo', userId: workers[1].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: {
+        'user.manager.name': 'Manager-A',
+        'user.name': 'Alice',
+      },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Alice todo')
+  })
+
+  it('sort by 3-level belongsTo column', async () => {
+    const managers = await app
+      .service('users')
+      .create([{ name: 'Manager-Z' }, { name: 'Manager-A' }])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Bob', managerId: managers[1].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Bob todo', userId: workers[1].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: { $sort: { 'user.manager.name': 1 } },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+    // Bob's manager is Manager-A (first), Alice's is Manager-Z
+    assert.strictEqual(result[0].text, 'Bob todo')
+    assert.strictEqual(result[1].text, 'Alice todo')
+  })
+
+  it('3-level with $and filters', async () => {
+    const managers = await app.service('users').create([
+      { name: 'Manager-A', age: 50 },
+      { name: 'Manager-B', age: 30 },
+    ])
+    const workers = await app.service('users').create([
+      { name: 'Alice', managerId: managers[0].id },
+      { name: 'Bob', managerId: managers[1].id },
+    ])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: workers[0].id },
+      { text: 'Bob todo', userId: workers[1].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: {
+        $and: [
+          { 'user.manager.name': 'Manager-A' },
+          { 'user.manager.age': { $gt: 40 } },
+        ],
+      },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Alice todo')
+  })
+
+  it('3-level path with unknown middle segment is silently ignored', async () => {
+    await app.service('users').create([{ name: 'Alice' }, { name: 'Bob' }])
+    await app.service('todos').create({ text: 'Todo 1', userId: 1 })
+
+    const result = await app.service('todos').find({
+      query: { 'user.bogus.name': 'Alice' },
+      paginate: false,
+    })
+    // Unknown middle segment → resolver returns null, filter is skipped
+    assert.strictEqual(result.length, 1)
+  })
+
+  it('3-level path through hasMany is silently skipped', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: users[0].id },
+      { text: 'Bob todo', userId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: { 'todos.user.name': 'Alice' },
+      paginate: false,
+    })
+    // hasMany in the middle of a path is out of scope → filter ignored
+    assert.strictEqual(result.length, 2)
   })
 
   it("sort by relation's column", async () => {

@@ -21,7 +21,7 @@ jobs:
       - run: corepack enable
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: 24.x
           cache: "pnpm"
       - run: pnpm i
       - run: pnpm lint
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
     env:
       DB: sqlite
 
@@ -51,7 +51,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
         postgres-version: [14, 15, 16, 17, latest] # see https://hub.docker.com/_/postgres
 
     services:
@@ -85,7 +85,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
         mysql-version: [lts, latest] # see https://hub.docker.com/_/mysql/
 
     services:

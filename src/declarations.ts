@@ -7,7 +7,7 @@ import type { ControlledTransaction, Kysely } from 'kysely'
 
 export type DialectType = 'mysql' | 'postgres' | 'sqlite' | 'mssql'
 
-type Relation = {
+export type Relation = {
   service: string
   keyHere: string
   keyThere: string

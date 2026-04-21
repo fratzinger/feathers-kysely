@@ -19,6 +19,7 @@ import type {
   DialectType,
   KyselyAdapterOptions,
   KyselyAdapterParams,
+  Relation,
   UpsertOptions,
 } from './declarations.js'
 import { expressionBuilder, sql } from 'kysely'
@@ -117,6 +118,8 @@ export class KyselyAdapter<
 
   private propertyMap: Map<string, any>
 
+  protected app?: any
+
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
       throw new Error(
@@ -153,6 +156,10 @@ export class KyselyAdapter<
       Object.entries(options.properties || {}),
     )
     // console.log(options.name, this.propertyMap)
+  }
+
+  async setup(app: any, _path: string) {
+    this.app = app
   }
 
   private getDatabaseDialect(db?: Kysely<any>): DialectType {
@@ -302,10 +309,14 @@ export class KyselyAdapter<
     let query = params.query || {}
     if (!this.options.relations) return { q, query }
 
+    // Normalize nested belongsTo notation to dot-notation so both JOIN analysis
+    // and WHERE-clause generation see a single canonical shape.
+    query = this.flattenRelationQuery(query)
+
     const alreadyJoined: string[] = []
 
     if (options.where) {
-      const whereResult = this.applyJoinsForWhere(q, params.query || {}, {
+      const whereResult = this.applyJoinsForWhere(q, query, {
         alreadyJoined,
       })
       q = whereResult.q
@@ -319,6 +330,173 @@ export class KyselyAdapter<
     return { q, query }
   }
 
+  private lookupRelationsForService(
+    serviceName: string,
+  ): Record<string, Relation> | undefined {
+    if (!this.app) return undefined
+    try {
+      const svc = this.app.service(serviceName)
+      return svc?.options?.relations
+    } catch {
+      return undefined
+    }
+  }
+
+  private isPlainRelationObject(value: any): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const keys = Object.keys(value)
+    if (keys.length === 0) return false
+    // Operator-only map (e.g. { $gt: 5 }) or collection operators ({ $some: ... })
+    // should be treated as a leaf, not traversed further.
+    if (keys.every((k) => k.startsWith('$'))) return false
+    return true
+  }
+
+  private flattenRelationQuery(query: Query): Query {
+    if (!this.options.relations || !query) return query
+
+    const out: Record<string, any> = {}
+
+    for (const key in query) {
+      const value = query[key]
+
+      if (FILTERS.includes(key as Filter)) {
+        out[key] = value
+        continue
+      }
+
+      if (key === '$and' || key === '$or') {
+        if (Array.isArray(value)) {
+          out[key] = value.map((sub) => this.flattenRelationQuery(sub))
+        } else {
+          out[key] = value
+        }
+        continue
+      }
+
+      const relation = this.options.relations[key]
+      if (
+        relation &&
+        !relation.asArray &&
+        this.isPlainRelationObject(value)
+      ) {
+        this.flattenBelongsToInto(
+          value,
+          [key],
+          out,
+          this.lookupRelationsForService(relation.service),
+        )
+        continue
+      }
+
+      out[key] = value
+    }
+
+    return out
+  }
+
+  private flattenBelongsToInto(
+    obj: any,
+    prefix: string[],
+    out: Record<string, any>,
+    currentRelations: Record<string, Relation> | undefined,
+  ) {
+    for (const subKey in obj) {
+      const value = obj[subKey]
+      const nextRelation = currentRelations?.[subKey]
+      if (
+        nextRelation &&
+        !nextRelation.asArray &&
+        this.isPlainRelationObject(value)
+      ) {
+        this.flattenBelongsToInto(
+          value,
+          [...prefix, subKey],
+          out,
+          this.lookupRelationsForService(nextRelation.service),
+        )
+      } else {
+        out[[...prefix, subKey].join('.')] = value
+      }
+    }
+  }
+
+  private resolveRelationPath(parts: string[]): {
+    steps: Array<{
+      relation: Relation
+      alias: string
+      sourceAlias: string
+      databaseTableName: string
+      sourceKey: string
+      targetKey: string
+    }>
+    columnAlias: string
+    columnName: string
+    isSimpleColumn: boolean
+  } | null {
+    if (!parts.length) return null
+    if (parts.length === 1) {
+      return {
+        steps: [],
+        columnAlias: this.options.name,
+        columnName: parts[0],
+        isSimpleColumn: true,
+      }
+    }
+
+    const steps: Array<{
+      relation: Relation
+      alias: string
+      sourceAlias: string
+      databaseTableName: string
+      sourceKey: string
+      targetKey: string
+    }> = []
+
+    let currentRelations = this.options.relations
+    let currentAlias = this.options.name
+    const aliasChain: string[] = []
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      const key = parts[i]
+      const relation = currentRelations?.[key]
+
+      if (
+        !relation ||
+        relation.asArray ||
+        !relation.databaseTableName ||
+        !relation.keyHere ||
+        !relation.keyThere
+      ) {
+        return null
+      }
+
+      aliasChain.push(key)
+      const alias = aliasChain.join('__')
+
+      if (steps.some((s) => s.alias === alias)) return null
+
+      steps.push({
+        relation,
+        alias,
+        sourceAlias: currentAlias,
+        databaseTableName: relation.databaseTableName,
+        sourceKey: relation.keyHere,
+        targetKey: relation.keyThere,
+      })
+
+      currentAlias = alias
+      currentRelations = this.lookupRelationsForService(relation.service)
+    }
+
+    return {
+      steps,
+      columnAlias: currentAlias,
+      columnName: parts[parts.length - 1],
+      isSimpleColumn: false,
+    }
+  }
+
   private applyJoinsForWhere<Q extends Record<string, any>>(
     q: Q,
     query: Query,
@@ -327,8 +505,6 @@ export class KyselyAdapter<
     },
   ): { q: Q; query: Query } {
     if (!this.options.relations) return { q, query }
-
-    const cloned = false
 
     for (const key in query) {
       if (FILTERS.includes(key as Filter)) continue
@@ -357,51 +533,35 @@ export class KyselyAdapter<
         }
 
         if (query[key] !== array) {
-          if (!cloned) {
-            query = { ...query }
-          }
-
-          query[key] = array
+          query = { ...query, [key]: array }
         }
 
         continue
       }
 
-      let relation = this.options.relations[key]
-      let relationKey = key
+      if (!key.includes('.')) continue
 
-      if (!relation && key.includes('.')) {
-        const parts = key.split('.')
-        if (parts.length !== 2) continue
-
-        relationKey = parts[0]
-        relation = this.options.relations[relationKey]
-      }
-
-      if (
-        !relation ||
-        !relation.databaseTableName ||
-        !relation.keyHere ||
-        !relation.keyThere ||
-        relation.asArray /** only apply joins for belongsTo relations */
-      )
+      const parts = key.split('.')
+      const resolved = this.resolveRelationPath(parts)
+      if (!resolved || resolved.isSimpleColumn || resolved.steps.length === 0)
         continue
 
-      if (options.alreadyJoined.includes(relationKey)) continue
+      for (const step of resolved.steps) {
+        if (options.alreadyJoined.includes(step.alias)) continue
 
-      const { databaseTableName, keyHere, keyThere } = relation
+        q = q.leftJoin(
+          `${step.databaseTableName} as ${step.alias}`,
+          `${step.alias}.${step.targetKey}`,
+          `${step.sourceAlias}.${step.sourceKey}`,
+        )
 
-      q = q.leftJoin(
-        `${databaseTableName} as ${relationKey}`,
-        `${relationKey}.${keyThere}`,
-        `${this.options.name}.${keyHere}`,
-      )
+        options.alreadyJoined.push(step.alias)
+      }
 
+      const last = resolved.steps[resolved.steps.length - 1]
       query = addToQuery(query, {
-        [`${relationKey}.${keyThere}`]: { $ne: null },
+        [`${last.alias}.${last.targetKey}`]: { $ne: null },
       })
-
-      options.alreadyJoined.push(relationKey)
     }
 
     return { q, query }
@@ -478,6 +638,8 @@ export class KyselyAdapter<
 
     if (!relation) {
       const parts = queryKey.split('.')
+      // Multi-level paths through hasMany (e.g. 'user.todos.text') are not
+      // supported yet. Only direct `<hasMany>.<column>` is resolvable here.
       if (parts.length !== 2) return
 
       relationKey = parts[0]
@@ -570,54 +732,44 @@ export class KyselyAdapter<
   ) {
     if (!this.options.relations) return
 
-    let relation = this.options.relations[queryKey]
+    const directRelation = this.options.relations[queryKey]
 
-    if (!relation && !queryKey.includes('.')) {
+    if (!directRelation && !queryKey.includes('.')) {
       return
     }
 
-    let relationKey = queryKey
-    let nested = true
-
-    if (!relation) {
+    // Dot-notation path: resolve across any number of belongsTo hops.
+    if (!directRelation) {
       const parts = queryKey.split('.')
-      if (parts.length !== 2) return
+      const resolved = this.resolveRelationPath(parts)
+      if (!resolved || resolved.isSimpleColumn || resolved.steps.length === 0) {
+        return
+      }
 
-      relationKey = parts[0]
-      nested = false
-
-      relation = this.options.relations[relationKey]
+      const aliasedKey = `${resolved.columnAlias}.${resolved.columnName}`
+      return this.handleQueryPropertyNormal(eb, aliasedKey, queryProperty, {
+        tableName: null,
+      })
     }
 
+    // Nested notation: this path is entered when applyJoins did not flatten
+    // (e.g. inside buildHasManyExists). Preserves 1-level behavior.
     if (
-      !relation ||
-      !relation.databaseTableName ||
-      !relation.keyHere ||
-      !relation.keyThere ||
-      relation.asArray
+      !directRelation.databaseTableName ||
+      !directRelation.keyHere ||
+      !directRelation.keyThere ||
+      directRelation.asArray
     ) {
       return
     }
 
     const subQueries: ExpressionWrapper<any, any, any>[] = []
-
-    if (nested) {
-      for (const subKey in queryProperty) {
-        const subQuery = this.handleQueryProperty(
-          eb,
-          subKey,
-          queryProperty[subKey],
-          { tableName: relationKey },
-        )
-
-        if (subQuery) subQueries.push(subQuery)
-      }
-    } else {
-      const subQuery = this.handleQueryPropertyNormal(
+    for (const subKey in queryProperty) {
+      const subQuery = this.handleQueryProperty(
         eb,
-        queryKey,
-        queryProperty,
-        { tableName: null },
+        subKey,
+        queryProperty[subKey],
+        { tableName: queryKey },
       )
 
       if (subQuery) subQueries.push(subQuery)
@@ -732,34 +884,25 @@ export class KyselyAdapter<
   ): Q {
     if (!this.options.relations || !$sort) return q
 
-    if (!$sort) return q
-
     for (const key in $sort) {
       if (!key.includes('.')) continue
 
-      const mapKey = key.split('.')[0]
-
-      const map = this.options.relations[mapKey]
-      if (
-        !map ||
-        !map.databaseTableName ||
-        !map.keyHere ||
-        !map.keyThere ||
-        map.asArray /** only apply joins for belongsTo relations */
-      )
+      const parts = key.split('.')
+      const resolved = this.resolveRelationPath(parts)
+      if (!resolved || resolved.isSimpleColumn || resolved.steps.length === 0)
         continue
 
-      if (options.alreadyJoined.includes(mapKey)) continue
+      for (const step of resolved.steps) {
+        if (options.alreadyJoined.includes(step.alias)) continue
 
-      const { databaseTableName, keyHere, keyThere } = map
+        q = q.leftJoin(
+          `${step.databaseTableName} as ${step.alias}`,
+          `${step.alias}.${step.targetKey}`,
+          `${step.sourceAlias}.${step.sourceKey}`,
+        )
 
-      q = q.leftJoin(
-        `${databaseTableName} as ${mapKey}`,
-        `${mapKey}.${keyThere}`,
-        `${this.options.name}.${keyHere}`,
-      )
-
-      options.alreadyJoined.push(mapKey)
+        options.alreadyJoined.push(step.alias)
+      }
     }
 
     return q
@@ -855,6 +998,15 @@ export class KyselyAdapter<
 
     if (belongsTo) return belongsTo
 
+    // Unresolved dot-paths whose first segment names a known relation are
+    // silently skipped (e.g. broken chains like 'user.bogus.name', or
+    // out-of-scope hasMany chains like 'todos.user.name'). Without this,
+    // the raw dot-path would leak into WHERE as an invalid column ref.
+    if (queryKey.includes('.') && this.options.relations) {
+      const firstPart = queryKey.split('.')[0]
+      if (this.options.relations[firstPart]) return undefined
+    }
+
     const json = this.handleJson(eb, queryKey, queryProperty)
 
     if (json) return json
@@ -925,6 +1077,17 @@ export class KyselyAdapter<
           const subquery = sql`(SELECT ${sql.raw(aggFn)}(${sql.ref(`${relationKey}.${column}`)}) FROM ${sql.table(relation.databaseTableName)} AS ${sql.ref(relationKey)} WHERE ${sql.ref(`${relationKey}.${relation.keyThere}`)} = ${sql.ref(`${this.options.name}.${relation.keyHere}`)}${filter ? this.buildHasManySortFilter(relationKey, filter) : sql.raw('')})`
 
           q = q.orderBy(subquery, getOrderByModifier(value)) as any
+          continue
+        }
+
+        // belongsTo chain (1..N hops): rewrite to the aliased column ref
+        const parts = key.split('.')
+        const resolved = this.resolveRelationPath(parts)
+        if (resolved && !resolved.isSimpleColumn && resolved.steps.length > 0) {
+          q = q.orderBy(
+            `${resolved.columnAlias}.${resolved.columnName}`,
+            getOrderByModifier(value),
+          ) as any
           continue
         }
       }

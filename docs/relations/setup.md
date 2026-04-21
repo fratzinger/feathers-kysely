@@ -66,3 +66,13 @@ users.id ← todos.userId
 ```
 
 See [hasMany](./has-many) for details.
+
+## App Setup
+
+If you plan to query or sort by [multi-level belongsTo chains](./belongs-to#multi-level-chains) (e.g. `event.assignment.customer.fullName`), make sure `app.setup()` runs before the first query. Feathers calls it automatically when you start the server via `app.listen()`. In tests or programmatic usage without `listen()`, invoke it explicitly:
+
+```ts
+await app.setup();
+```
+
+This is how the adapter discovers the relation definitions of _other_ services when resolving a chained path. Single-level queries work without it.

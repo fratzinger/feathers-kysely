@@ -1,0 +1,8 @@
+{
+  "name": "feathers-kysely",
+  "compatibility_date": "2026-04-21",
+  "assets": {
+    "directory": "./docs/.vitepress/dist",
+    "not_found_handling": "404-page",
+  },
+}

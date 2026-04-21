@@ -15,6 +15,19 @@ await app.service("users").find({
 
 Since there is at most one related record, no aggregation is needed.
 
+### Multi-level belongsTo
+
+You can sort by a column reached through any number of belongsTo hops. Each hop becomes a `LEFT JOIN`:
+
+```ts
+// Sort events by their assignment's customer's full name
+await app.service("events").find({
+  query: { $sort: { "assignment.customer.fullName": 1 } },
+});
+```
+
+Requires `app.setup()` to have run so the adapter can look up related services — see [Setup → App Setup](./setup#app-setup). For more on chained paths, see [belongsTo → Multi-level chains](./belongs-to#multi-level-chains).
+
 ## hasMany Sorting
 
 For hasMany (`asArray: true`) relations, sorting uses a subquery with an aggregate function to avoid duplicating parent rows:
