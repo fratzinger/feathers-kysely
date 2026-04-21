@@ -849,6 +849,30 @@ describe('relations', () => {
     assert.strictEqual(result.length, 2)
   })
 
+  it('unresolvable 3-level path inside $or does not leak raw column refs', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: users[0].id },
+      { text: 'Bob todo', userId: users[1].id },
+    ])
+
+    // Both legs of the $or reference a path that cannot be resolved.
+    // Neither must leak into SQL as "a"."b"."c" — otherwise Postgres raises
+    // "missing FROM-clause entry for table ...".
+    const result = await app.service('todos').find({
+      query: {
+        $or: [
+          { 'user.bogus.name': { $iLike: '%Alice%' } },
+          { 'user.bogus.age': { $gt: 0 } },
+        ],
+      },
+      paginate: false,
+    })
+    assert.strictEqual(result.length, 2)
+  })
+
   it("sort by relation's column", async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },

@@ -1,4 +1,5 @@
 import type {
+  Application,
   Id,
   NullableId,
   Paginated,
@@ -118,7 +119,7 @@ export class KyselyAdapter<
 
   private propertyMap: Map<string, any>
 
-  protected app?: any
+  declare app: Application
 
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
@@ -158,7 +159,7 @@ export class KyselyAdapter<
     // console.log(options.name, this.propertyMap)
   }
 
-  async setup(app: any, _path: string) {
+  async setup(app: Application, _path: string) {
     this.app = app
   }
 
@@ -343,7 +344,8 @@ export class KyselyAdapter<
   }
 
   private isPlainRelationObject(value: any): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return false
     const keys = Object.keys(value)
     if (keys.length === 0) return false
     // Operator-only map (e.g. { $gt: 5 }) or collection operators ({ $some: ... })
@@ -375,11 +377,7 @@ export class KyselyAdapter<
       }
 
       const relation = this.options.relations[key]
-      if (
-        relation &&
-        !relation.asArray &&
-        this.isPlainRelationObject(value)
-      ) {
+      if (relation && !relation.asArray && this.isPlainRelationObject(value)) {
         this.flattenBelongsToInto(
           value,
           [key],
@@ -998,18 +996,26 @@ export class KyselyAdapter<
 
     if (belongsTo) return belongsTo
 
-    // Unresolved dot-paths whose first segment names a known relation are
-    // silently skipped (e.g. broken chains like 'user.bogus.name', or
-    // out-of-scope hasMany chains like 'todos.user.name'). Without this,
-    // the raw dot-path would leak into WHERE as an invalid column ref.
-    if (queryKey.includes('.') && this.options.relations) {
-      const firstPart = queryKey.split('.')[0]
-      if (this.options.relations[firstPart]) return undefined
-    }
-
     const json = this.handleJson(eb, queryKey, queryProperty)
 
     if (json) return json
+
+    // Unresolved dot-paths must not leak into WHERE as raw column refs.
+    // A path reaches this point only if none of the handlers above claimed
+    // it. We skip it when either:
+    //   - the first segment matches a known relation (broken chain, e.g.
+    //     'user.bogus.name' or hasMany chain 'todos.user.name'), or
+    //   - the path has 2+ separators (multi-segment paths are only valid
+    //     as relation chains or JSON access, both of which would have been
+    //     caught above; anything else is almost certainly unintended).
+    // Single-dot paths whose first segment is NOT a known relation are
+    // left alone — they may be legitimate qualified refs like
+    // `alias.column` added by addToQuery null-protect on a prior hop.
+    if (queryKey.includes('.')) {
+      const parts = queryKey.split('.')
+      if (parts.length > 2) return undefined
+      if (this.options.relations?.[parts[0]]) return undefined
+    }
 
     const normal = this.handleQueryPropertyNormal(
       eb,
