@@ -1,5 +1,4 @@
 import type {
-  Application,
   Id,
   NullableId,
   Paginated,
@@ -119,7 +118,7 @@ export class KyselyAdapter<
 
   private propertyMap: Map<string, any>
 
-  declare app: Application
+  declare app: any
 
   constructor(options: KyselyAdapterOptions) {
     if (!options || !options.Model) {
@@ -159,7 +158,7 @@ export class KyselyAdapter<
     // console.log(options.name, this.propertyMap)
   }
 
-  async setup(app: Application, _path: string) {
+  async setup(app: any, _path: string) {
     this.app = app
   }
 
