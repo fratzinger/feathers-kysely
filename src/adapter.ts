@@ -120,7 +120,7 @@ export class KyselyAdapter<
 
   declare app: any
 
-  constructor(options: KyselyAdapterOptions) {
+  constructor(options: KyselyAdapterOptions, app?: any) {
     if (!options || !options.Model) {
       throw new Error(
         'You must provide a Kysely instance to the `Model` option',
@@ -156,10 +156,14 @@ export class KyselyAdapter<
       Object.entries(options.properties || {}),
     )
     // console.log(options.name, this.propertyMap)
+
+    if (app) {
+      this.app = app
+    }
   }
 
   async setup(app: any, _path: string) {
-    this.app = app
+    this.app ??= app
   }
 
   private getDatabaseDialect(db?: Kysely<any>): DialectType {
