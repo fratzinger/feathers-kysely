@@ -7,7 +7,9 @@
       "Bash(pnpm test *)",
       "Bash(pnpm build *)",
       "Bash(pnpm lint *)",
-      "Bash(pnpm docs:build)"
+      "Bash(pnpm docs:build)",
+      "Bash(pnpm view *)",
+      "Bash(DB=sqlite pnpm vitest run)"
     ]
   }
 }
