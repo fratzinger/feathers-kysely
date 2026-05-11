@@ -49,8 +49,8 @@ importers:
         specifier: ^9.39.1
         version: 9.39.1
       feathers-adapter-vitest:
-        specifier: ^0.0.15
-        version: 0.0.15(@feathersjs/errors@5.0.37)(@feathersjs/feathers@5.0.37)(vitest@4.0.8(@types/node@24.10.0))
+        specifier: ^0.0.17
+        version: 0.0.17(@feathersjs/errors@5.0.37)(@feathersjs/feathers@5.0.37)(vitest@4.0.8(@types/node@24.10.0))
       feathers-hooks-common:
         specifier: ^8.2.1
         version: 8.2.1(@feathersjs/feathers@5.0.37)
@@ -1114,6 +1114,11 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
+  acorn@8.16.0:
+    resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
   ajv@6.12.6:
     resolution: {integrity: sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g==}
 
@@ -1590,8 +1595,8 @@ packages:
       picomatch:
         optional: true
 
-  feathers-adapter-vitest@0.0.15:
-    resolution: {integrity: sha512-C50cB8x/ALm/RLqBznBrfY+hTYTzoY4X4uu8f30E8UuoNkl8C8YKCWzc06N4xFDTs0TXZP2UMs6pC0U4a5Dpkg==}
+  feathers-adapter-vitest@0.0.17:
+    resolution: {integrity: sha512-2+1GHJZQ9l/5dfn8Pta8pJ3kjjacH3jzSqjQ2jQMr5ss1DoS0AG2NrKbGl98WDvRcykDois93FkIQ3JYYSn1/Q==}
     engines: {node: '>= 20'}
     peerDependencies:
       '@feathersjs/errors': ^5.0.0
@@ -2283,6 +2288,11 @@ packages:
 
   semver@7.7.3:
     resolution: {integrity: sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q==}
+    engines: {node: '>=10'}
+    hasBin: true
+
+  semver@7.8.0:
+    resolution: {integrity: sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -3722,7 +3732,13 @@ snapshots:
     dependencies:
       acorn: 8.15.0
 
+  acorn-jsx@5.3.2(acorn@8.16.0):
+    dependencies:
+      acorn: 8.16.0
+
   acorn@8.15.0: {}
+
+  acorn@8.16.0: {}
 
   ajv@6.12.6:
     dependencies:
@@ -4173,8 +4189,8 @@ snapshots:
 
   espree@9.6.1:
     dependencies:
-      acorn: 8.15.0
-      acorn-jsx: 5.3.2(acorn@8.15.0)
+      acorn: 8.16.0
+      acorn-jsx: 5.3.2(acorn@8.16.0)
       eslint-visitor-keys: 3.4.3
 
   esquery@1.6.0:
@@ -4239,7 +4255,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.3
 
-  feathers-adapter-vitest@0.0.15(@feathersjs/errors@5.0.37)(@feathersjs/feathers@5.0.37)(vitest@4.0.8(@types/node@24.10.0)):
+  feathers-adapter-vitest@0.0.17(@feathersjs/errors@5.0.37)(@feathersjs/feathers@5.0.37)(vitest@4.0.8(@types/node@24.10.0)):
     dependencies:
       '@feathersjs/errors': 5.0.37
       '@feathersjs/feathers': 5.0.37
@@ -4465,10 +4481,10 @@ snapshots:
 
   jsonc-eslint-parser@2.4.0:
     dependencies:
-      acorn: 8.15.0
+      acorn: 8.16.0
       eslint-visitor-keys: 3.4.3
       espree: 9.6.1
-      semver: 7.7.3
+      semver: 7.8.0
 
   keyv@4.5.4:
     dependencies:
@@ -4896,6 +4912,8 @@ snapshots:
   semver@7.7.2: {}
 
   semver@7.7.3: {}
+
+  semver@7.8.0: {}
 
   seq-queue@0.0.5: {}
 

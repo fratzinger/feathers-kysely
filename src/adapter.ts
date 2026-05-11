@@ -155,7 +155,6 @@ export class KyselyAdapter<
     this.propertyMap = new Map<string, any>(
       Object.entries(options.properties || {}),
     )
-    // console.log(options.name, this.propertyMap)
 
     if (app) {
       this.app = app
@@ -257,8 +256,6 @@ export class KyselyAdapter<
     const filterQueryResult = this.filterQuery(params, options?.id)
     const filters = filterQueryResult.filters
     let query = filterQueryResult.query
-
-    // console.log('name', this.options.name)
 
     let q = this.db(params).selectFrom(this.options.name)
     const applyResult = this.applyJoins(q, filterQueryResult.params, {
@@ -800,11 +797,31 @@ export class KyselyAdapter<
 
     const column = traverseJSON(eb, this.col(parts[0]), parts.slice(1))
 
+    return this.buildPropertyExpression(eb, column, queryProperty)
+  }
+
+  private buildPropertyExpression(
+    eb: ExpressionBuilder<any, any>,
+    column: any,
+    queryProperty: any,
+  ) {
     if (_.isObject(queryProperty)) {
-      const qs = []
+      const qs: any[] = []
       // loop through OPERATORS and apply them
       for (const operator in queryProperty) {
-        const value = queryProperty[operator]
+        const value = (queryProperty as Record<string, any>)[operator]
+
+        if (
+          (operator === '$in' || operator === '$nin') &&
+          Array.isArray(value) &&
+          value.length === 0
+        ) {
+          qs.push(
+            operator === '$in' ? sql<boolean>`1 = 0` : sql<boolean>`1 = 1`,
+          )
+          continue
+        }
+
         const op = this.getOperator(operator, value)
         if (!op) continue
 
@@ -815,7 +832,7 @@ export class KyselyAdapter<
         return eb.and(qs)
       }
 
-      // no operators matched - do a simple equality check
+      // no operators matched - fall through to simple equality check
     }
 
     const op = this.getOperator('$eq', queryProperty)
@@ -829,7 +846,6 @@ export class KyselyAdapter<
     queryProperty: any,
     options?: HandleQueryOptions,
   ) {
-    // console.log('handleQueryPropertyNormal', queryKey, queryProperty)
     if (queryKey === '$and' || queryKey === '$or') {
       const method = eb[queryKey === '$and' ? 'and' : 'or']
       const subs = []
@@ -844,36 +860,7 @@ export class KyselyAdapter<
 
     const col = this.col(queryKey, { tableName: options?.tableName })
 
-    if (_.isObject(queryProperty)) {
-      // console.log('isObject', queryKey, queryProperty)
-      const qs = []
-      // loop through OPERATORS and apply them
-      for (const operator in queryProperty) {
-        const value = queryProperty[operator]
-        const op = this.getOperator(operator, value)
-        if (!op) continue
-        // console.log(
-        //   'property',
-        //   col,
-        //   op,
-        //   value,
-        //   this.transformOperatorValue(operator, value),
-        // )
-        qs.push(eb(col, op, this.transformOperatorValue(operator, value)))
-      }
-
-      if (qs.length) {
-        return eb.and(qs)
-      }
-
-      // no operators matched - do a simple equality check
-    }
-
-    // console.log('not isObject', queryKey, queryProperty)
-    const op = this.getOperator('$eq', queryProperty)
-    if (!op) return
-    // console.log('property', col, op, queryProperty)
-    return eb(col, op, queryProperty)
+    return this.buildPropertyExpression(eb, col, queryProperty)
   }
 
   private applyJoinsForOrderBy<Q extends Record<string, any>>(
@@ -1169,9 +1156,6 @@ export class KyselyAdapter<
       order: true,
     })
 
-    // const compiled = q.compile()
-    // console.log(compiled.sql, compiled.parameters)
-
     if (paginate && paginate.default) {
       const countQuery = this.composeQuery(params, {
         select: [
@@ -1215,9 +1199,6 @@ export class KyselyAdapter<
       limit: 1,
       where: true,
     })
-
-    // const compiled = q.compile()
-    // console.log(compiled.sql, compiled.parameters)
 
     const item = await q.executeTakeFirst().catch(errorHandler)
 
@@ -1493,6 +1474,11 @@ export class KyselyAdapter<
     const { filters, options } = this.filterQuery(params)
     const { name, id: idField } = options
     const isArray = Array.isArray(_data)
+
+    if (isArray && _data.length === 0) {
+      return []
+    }
+
     const $select = applySelectId(filters.$select, idField)
 
     const q = this.db(params)
@@ -1500,9 +1486,6 @@ export class KyselyAdapter<
       .values(this.convertValues(_data) as any)
 
     const returning = this.applyReturning(q, $select)
-
-    // const compiled = returning.compile()
-    // console.log(compiled.sql, compiled.parameters)
 
     const response = await this.executeAndReturn(returning, {
       isArray,
@@ -1564,9 +1547,6 @@ export class KyselyAdapter<
     }
 
     const returning = this.applyReturning(q, $select)
-
-    // const compiled = returning.compile()
-    // console.log(compiled.sql, compiled.parameters)
 
     const response = await this.executeAndReturn(returning, {
       isArray,
@@ -1797,10 +1777,15 @@ export class KyselyAdapter<
     const { id: idField, name } = this.options
 
     const data = this.convertValues(_data)
+    const setData = _.omit(data, idField)
 
-    const updateTable = this.db(params)
-      .updateTable(name)
-      .set(_.omit(data, idField))
+    if (Object.keys(setData).length === 0) {
+      return asMulti
+        ? await this._find({ ...params, paginate: false })
+        : await this._get(id as Id, params)
+    }
+
+    const updateTable = this.db(params).updateTable(name).set(setData)
 
     const { q, buildWhere } = await this.getWhereForUpdateOrDelete(
       updateTable,
@@ -1812,9 +1797,6 @@ export class KyselyAdapter<
     if (!q) {
       return [] // nothing to patch
     }
-
-    // const compiled = q.compile()
-    // console.log(compiled.sql, compiled.parameters)
 
     const response = await this.executeAndReturn(q, {
       isArray: asMulti,
@@ -1896,9 +1878,6 @@ export class KyselyAdapter<
     if (!q) {
       return isMulti ? [] : Promise.reject(new NotFound())
     }
-
-    // const compiled = q.compile()
-    // console.log(compiled.sql, compiled.parameters)
 
     const _result = await q.execute().catch(errorHandler)
 

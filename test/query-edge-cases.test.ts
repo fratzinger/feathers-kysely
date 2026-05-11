@@ -245,4 +245,55 @@ describe('query edge cases', () => {
       // error is also acceptable
     }
   })
+
+  // MARK: patch with empty data
+
+  describe('patch with empty data', () => {
+    it('patch(id, {}) returns the unchanged record', async () => {
+      const created = await app
+        .service('users')
+        .create({ name: 'Alice', age: 30 })
+      const result = await app.service('users').patch(created.id, {})
+      assert.deepStrictEqual(result, created)
+    })
+
+    it('patch(id, { [idField]: X }) returns the unchanged record', async () => {
+      const created = await app
+        .service('users')
+        .create({ name: 'Bob', age: 25 })
+      const result = (await app
+        .service('users')
+        .patch(created.id, { id: 999 } as any)) as Record<string, any>
+      assert.strictEqual(result.id, created.id)
+      assert.strictEqual(result.name, 'Bob')
+      assert.strictEqual(result.age, 25)
+    })
+
+    it('patch(null, {}, params) returns all matching records unchanged', async () => {
+      await app.service('users').create([
+        { name: 'A', age: 20 },
+        { name: 'B', age: 20 },
+        { name: 'C', age: 99 },
+      ])
+      const result = await app
+        .service('users')
+        .patch(null, {}, { query: { age: 20 } })
+      assert.strictEqual(result.length, 2)
+      assert.ok(result.every((u) => u.age === 20))
+    })
+
+    it('patch(null, {}, params) with no matches returns []', async () => {
+      const result = await app
+        .service('users')
+        .patch(null, {}, { query: { age: 999 } })
+      assert.deepStrictEqual(result, [])
+    })
+
+    it('patch(id, {}) on missing id throws NotFound', async () => {
+      await assert.rejects(
+        () => app.service('users').patch(999_999, {}),
+        (err: any) => err.name === 'NotFound',
+      )
+    })
+  })
 })
