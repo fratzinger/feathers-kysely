@@ -255,7 +255,6 @@ export class KyselyAdapter<
   ) {
     const filterQueryResult = this.filterQuery(params, options?.id)
     const filters = filterQueryResult.filters
-    let query = filterQueryResult.query
 
     let q = this.db(params).selectFrom(this.options.name)
     const applyResult = this.applyJoins(q, filterQueryResult.params, {
@@ -263,7 +262,7 @@ export class KyselyAdapter<
       order: options?.order,
     })
     q = applyResult.q
-    query = applyResult.query
+    const query = applyResult.query
 
     if (options?.select) {
       const $select = Array.isArray(options.select)

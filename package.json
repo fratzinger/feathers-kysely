@@ -42,7 +42,7 @@
     }
   },
   "scripts": {
-    "build": "tsup-node",
+    "build": "tsdown",
     "version": "pnpm build",
     "test": "vitest run",
     "lint": "eslint",
@@ -52,38 +52,39 @@
     "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
-    "@feathersjs/adapter-commons": "^5.0.37",
-    "@feathersjs/commons": "^5.0.37",
-    "@feathersjs/errors": "^5.0.37",
-    "@feathersjs/feathers": "^5.0.37",
-    "feathers-utils": "^10.0.0-7"
+    "@feathersjs/adapter-commons": "^5.0.44",
+    "@feathersjs/commons": "^5.0.44",
+    "@feathersjs/errors": "^5.0.44",
+    "@feathersjs/feathers": "^5.0.44",
+    "feathers-utils": "^10.0.0"
   },
   "devDependencies": {
-    "@feathers-community/eslint-config": "^0.0.10",
-    "@tsconfig/node22": "^22.0.2",
+    "@feathers-community/eslint-config": "^0.1.0",
+    "@tsconfig/node22": "^22.0.5",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^24.10.0",
-    "@types/pg": "^8.15.6",
-    "better-sqlite3": "^12.4.1",
-    "dotenv": "^17.2.3",
-    "eslint": "^9.39.1",
+    "@types/node": "^25.6.2",
+    "@types/pg": "^8.20.0",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2",
+    "eslint": "^10.3.0",
     "feathers-adapter-vitest": "^0.0.17",
     "feathers-hooks-common": "^8.2.1",
-    "kysely": "^0.28.8",
-    "mysql2": "^3.15.3",
-    "pg": "^8.16.3",
+    "kysely": "^0.29.0",
+    "mysql2": "^3.22.3",
+    "pg": "^8.20.0",
     "shx": "^0.4.0",
-    "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.2",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3",
+    "unrun": "^0.3.0",
+    "vite": "^8.0.12",
     "vitepress": "^1.6.4",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.6"
   },
   "peerDependencies": {
     "@feathersjs/feathers": "^5.0.0",
     "kysely": "^0.28.0"
   },
-  "packageManager": "pnpm@10.21.0",
+  "packageManager": "pnpm@11.0.9",
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3"
