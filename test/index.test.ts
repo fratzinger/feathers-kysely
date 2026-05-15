@@ -2,11 +2,13 @@ import type { Generated } from 'kysely'
 import { Kysely } from 'kysely'
 import { feathers } from '@feathersjs/feathers'
 import { defineTestSuite } from 'feathers-adapter-vitest'
-import dialect from './dialect.js'
+import dialect, { getDialect } from './dialect.js'
 
 import { KyselyService } from '../src/index.js'
 import { afterAll, beforeAll, describe } from 'vitest'
-import { addPrimaryKey } from './test-utils.js'
+import { addPrimaryKey, addUuidPrimaryKey } from './test-utils.js'
+
+const isPostgres = getDialect() === 'postgres'
 
 const testSuite = defineTestSuite({
   blacklist: [
@@ -31,10 +33,19 @@ interface TodosTable {
   personId: number
 }
 
+interface PeopleUuidTable {
+  uuid: Generated<string>
+  name: string
+  age: number
+  time?: string
+  created?: boolean
+}
+
 interface DB {
   todos: TodosTable
   people: PeopleTable
   users: PeopleTable
+  'people-uuid': PeopleUuidTable
 }
 
 function setup() {
@@ -92,6 +103,21 @@ function setup() {
         .addColumn('created', 'boolean'),
       'id',
     ).execute()
+
+    // drop and create the people-uuid table (postgres only)
+    if (isPostgres) {
+      await db.schema.dropTable('people-uuid').ifExists().execute()
+
+      await addUuidPrimaryKey(
+        db.schema
+          .createTable('people-uuid')
+          .addColumn('name', 'text', (col) => col.notNull())
+          .addColumn('age', 'real')
+          .addColumn('time', 'real')
+          .addColumn('created', 'boolean'),
+        'uuid',
+      ).execute()
+    }
   }
 
   type Person = {
@@ -112,6 +138,7 @@ function setup() {
   type ServiceTypes = {
     people: KyselyService<Person>
     'people-customid': KyselyService<Person>
+    'people-uuid': KyselyService<Person>
     users: KyselyService<Person>
     todos: KyselyService<Todo>
   }
@@ -146,6 +173,16 @@ function setup() {
     multi: true,
   })
 
+  const peopleUuid = isPostgres
+    ? new KyselyService<Person>({
+        Model: db,
+        id: 'uuid',
+        name: 'people-uuid',
+        events: ['testing'],
+        multi: true,
+      })
+    : undefined
+
   const todos = new TodoService({
     Model: db,
     name: 'todos',
@@ -157,11 +194,16 @@ function setup() {
     .use('users', users)
     .use('todos', todos)
 
+  if (peopleUuid) {
+    app.use('people-uuid', peopleUuid)
+  }
+
   return {
     db,
     clean,
     people,
     peopleId,
+    peopleUuid,
     users,
     todos,
     app,
@@ -178,6 +220,9 @@ describe('Feathers Kysely Service', () => {
   testSuite({ app, serviceName: 'users', idProp: 'id' })
   testSuite({ app, serviceName: 'people', idProp: 'id' })
   testSuite({ app, serviceName: 'people-customid', idProp: 'customid' })
+  if (isPostgres) {
+    testSuite({ app, serviceName: 'people-uuid', idProp: 'uuid' })
+  }
 
   describe('specific', () => {
     beforeAll(clean)
