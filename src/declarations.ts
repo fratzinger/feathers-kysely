@@ -36,8 +36,20 @@ export interface KyselyAdapterTransaction {
   id?: number
   starting: boolean
   parent?: KyselyAdapterTransaction
+  /**
+   * Name of the savepoint backing a nested transaction. Set only for nested
+   * transactions; root transactions commit/rollback the whole transaction.
+   */
+  savepoint?: string
   committed?: Promise<boolean | undefined>
   resolve?: (value: boolean) => void
+  /**
+   * Root-scoped queue of deferred Feathers event emitters. Populated by the
+   * `withTransaction()` around hook; flushed on root commit, discarded on root
+   * rollback. Nested transactions share the root's array. Undefined for legacy
+   * `trxStart()` transactions (no deferral).
+   */
+  deferredEvents?: Array<() => void>
 }
 
 export interface UpsertOptions<T = any> {
