@@ -20,6 +20,7 @@ describe('exports', () => {
         'trxCommit',
         'trxRollback',
         'trxStart',
+        'withTransaction',
       ].sort(),
     )
   })
