@@ -17,19 +17,16 @@
   },
   "contributors": [],
   "bugs": {
-    "url": "https://github.com/marshallswain/feathers-kysely/issues"
+    "url": "https://github.com/fratzinger/feathers-kysely/issues"
   },
   "engines": {
-    "node": ">= 20"
+    "node": ">= 22"
   },
   "files": [
     "CHANGELOG.md",
     "LICENSE",
     "README.md",
-    "src/**",
-    "dist/**",
-    "*.d.ts",
-    "*.js"
+    "dist"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -38,13 +35,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "tsdown",
     "version": "pnpm build",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint",
     "vitest": "vitest",
     "docs:dev": "vitepress dev docs",
@@ -82,7 +81,7 @@
   },
   "peerDependencies": {
     "@feathersjs/feathers": "^5.0.0",
-    "kysely": "^0.28.0"
+    "kysely": ">=0.28.0 <0.30.0"
   },
   "packageManager": "pnpm@11.1.2",
   "pnpm": {

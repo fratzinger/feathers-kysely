@@ -12,7 +12,12 @@ import type {
   AdapterQuery,
 } from '@feathersjs/adapter-commons'
 import { AdapterBase, getLimit } from '@feathersjs/adapter-commons'
-import { BadRequest, MethodNotAllowed, NotFound } from '@feathersjs/errors'
+import {
+  BadRequest,
+  GeneralError,
+  MethodNotAllowed,
+  NotFound,
+} from '@feathersjs/errors'
 
 import { errorHandler } from './error-handler.js'
 import type {
@@ -32,7 +37,7 @@ import type {
   SelectQueryBuilder,
   UpdateQueryBuilder,
   ExpressionBuilder,
-  ExpressionWrapper,
+  Expression,
 } from 'kysely'
 import {
   applySelectId,
@@ -61,7 +66,32 @@ const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $overlap: '&&',
 }
 
+// Operators that only exist in Postgres. They are not registered (and therefore
+// rejected by Feathers with a BadRequest) on other dialects. NOTE: $iLike is
+// intentionally NOT here — it is translated to a case-insensitive LIKE instead.
+const POSTGRES_ONLY_OPERATORS = ['$contains', '$contained', '$overlap']
+
+function getDatabaseDialect(db: Kysely<any>): DialectType {
+  const adapterName = db.getExecutor().adapter.constructor.name.toLowerCase()
+
+  if (adapterName.includes('sqlite')) return 'sqlite'
+  if (adapterName.includes('postgres')) return 'postgres'
+  if (adapterName.includes('mysql')) return 'mysql'
+  if (adapterName.includes('mssql') || adapterName.includes('sqlserver')) {
+    throw new Error(
+      'MSSQL is not supported by feathers-kysely. Supported dialects: postgres, mysql, sqlite.',
+    )
+  }
+
+  return 'sqlite'
+}
+
 // TODO: $between, $notBetween
+
+// Alias for the window-count column injected into the data query so a paginated
+// find can return rows and the grand total in a single round-trip. Stripped
+// from every row before the result is returned.
+const PAGINATION_TOTAL_KEY = '__fk_total'
 
 const FILTERS = ['$select', '$sort', '$limit', '$skip'] as const
 type Filter = (typeof FILTERS)[number]
@@ -131,6 +161,8 @@ export class KyselyAdapter<
       throw new Error('No table name specified.')
     }
 
+    const dialectType = options.dialectType ?? getDatabaseDialect(options.Model)
+
     super({
       id: 'id',
       ...options,
@@ -141,15 +173,19 @@ export class KyselyAdapter<
       operators: [
         ...new Set([
           ...(options.operators ?? []),
-          ...Object.keys(OPERATORS),
+          // Don't register Postgres-only operators on other dialects so Feathers
+          // rejects them with a BadRequest instead of producing invalid SQL.
+          ...Object.keys(OPERATORS).filter(
+            (op) =>
+              dialectType === 'postgres' ||
+              !POSTGRES_ONLY_OPERATORS.includes(op),
+          ),
           '$none',
           '$some',
           '$every',
         ]),
       ],
     })
-
-    const dialectType = this.getDatabaseDialect(options.Model)
 
     this.options.dialectType ??= dialectType
     this.propertyMap = new Map<string, any>(
@@ -163,20 +199,6 @@ export class KyselyAdapter<
 
   async setup(app: any, _path: string) {
     this.app ??= app
-  }
-
-  private getDatabaseDialect(db?: Kysely<any>): DialectType {
-    const adapterName = (db ?? this.Model)
-      .getExecutor()
-      .adapter.constructor.name.toLowerCase()
-
-    if (adapterName.includes('sqlite')) return 'sqlite'
-    if (adapterName.includes('postgres')) return 'postgres'
-    if (adapterName.includes('mysql')) return 'mysql'
-    if (adapterName.includes('mssql') || adapterName.includes('sqlserver'))
-      return 'mssql'
-
-    return 'sqlite'
   }
 
   get Model() {
@@ -214,17 +236,28 @@ export class KyselyAdapter<
       $select: _select,
       $sort,
       $limit: _limit,
-      $skip = 0,
+      $skip: _skip = 0,
       ...query
     } = (params.query || {}) as AdapterQuery
+
+    // A negative $skip is invalid; floor it to 0 so it never reaches OFFSET.
+    const $skip = typeof _skip === 'number' && _skip > 0 ? _skip : 0
+
+    // getLimit only clamps the upper bound — floor negative client-supplied
+    // limits to 0 (a negative LIMIT errors on Postgres/MySQL). The sqlite/mysql
+    // "no limit" sentinels below are only reached when no limit was given.
+    const baseLimit = getLimit(_limit, options.paginate)
+    const clampedLimit =
+      typeof baseLimit === 'number' && baseLimit < 0 ? 0 : baseLimit
+
     const $limit = $skip
-      ? (getLimit(_limit, options.paginate) ??
+      ? (clampedLimit ??
         (options.dialectType === 'sqlite'
           ? -1
           : options.dialectType === 'mysql'
             ? 4294967295 /** max value for mysql */
             : undefined))
-      : getLimit(_limit, options.paginate)
+      : clampedLimit
 
     const $select = applySelectId(_select, options.id)
 
@@ -293,6 +326,17 @@ export class KyselyAdapter<
 
     if (options?.order) {
       q = this.applySort(q, filters)
+
+      // When a result window (LIMIT/OFFSET) is in effect but the caller gave no
+      // $sort, append the primary key as a deterministic tiebreaker. Without it,
+      // OFFSET pagination can return overlapping or missing rows across pages.
+      const hasSort = !!filters.$sort && Object.keys(filters.$sort).length > 0
+      const windowed =
+        (typeof filters.$limit === 'number' && filters.$limit > 0) ||
+        (typeof filters.$skip === 'number' && filters.$skip > 0)
+      if (!hasSort && windowed) {
+        q = (q as any).orderBy(this.col(this.options.id), 'asc')
+      }
     }
 
     return q
@@ -577,7 +621,7 @@ export class KyselyAdapter<
     filterQuery: Record<string, any>,
     operator: '$some' | '$none' | '$every' = '$some',
   ) {
-    const subQueries: ExpressionWrapper<any, any, any>[] = []
+    const subQueries: Expression<any>[] = []
 
     for (const subKey in filterQuery) {
       const subQuery = this.handleQueryProperty(
@@ -656,7 +700,7 @@ export class KyselyAdapter<
     }
 
     if (nested) {
-      const results: ExpressionWrapper<any, any, any>[] = []
+      const results: Expression<any>[] = []
 
       // Separate collection operators ($none, $some, $every) from regular filters
       const regularFilters: Record<string, any> = {}
@@ -694,7 +738,7 @@ export class KyselyAdapter<
     }
 
     // Dot notation: always behaves as $some (backward-compatible)
-    const subQueries: ExpressionWrapper<any, any, any>[] = []
+    const subQueries: Expression<any>[] = []
     const nestedWhere = this.handleQueryPropertyNormal(
       eb,
       queryKey,
@@ -760,7 +804,7 @@ export class KyselyAdapter<
       return
     }
 
-    const subQueries: ExpressionWrapper<any, any, any>[] = []
+    const subQueries: Expression<any>[] = []
     for (const subKey in queryProperty) {
       const subQuery = this.handleQueryProperty(
         eb,
@@ -794,7 +838,11 @@ export class KyselyAdapter<
       return
     }
 
-    const column = traverseJSON(eb, this.col(parts[0]), parts.slice(1))
+    const column = traverseJSON(
+      this.col(parts[0]),
+      parts.slice(1),
+      this.options.dialectType,
+    )
 
     return this.buildPropertyExpression(eb, column, queryProperty)
   }
@@ -846,6 +894,14 @@ export class KyselyAdapter<
     options?: HandleQueryOptions,
   ) {
     if (queryKey === '$and' || queryKey === '$or') {
+      // Explicit boolean-identity semantics for an empty operand: an empty `$and`
+      // matches everything (1 = 1), an empty `$or` matches nothing (1 = 0). This
+      // prevents an authorization hook that injects `$or: []` (e.g. derived from
+      // an empty list of permitted scopes) from silently matching all rows.
+      if (Array.isArray(queryProperty) && queryProperty.length === 0) {
+        return queryKey === '$and' ? sql<boolean>`1 = 1` : sql<boolean>`1 = 0`
+      }
+
       const method = eb[queryKey === '$and' ? 'and' : 'or']
       const subs = []
       for (const subQuery of queryProperty) {
@@ -896,12 +952,20 @@ export class KyselyAdapter<
   }
 
   private getOperator(op: string, value: any) {
-    if (value !== null) {
+    if (value === null) {
+      if (op === '$ne') return 'is not'
+      if (op === '$eq') return 'is'
       return OPERATORS[op]
     }
 
-    if (op === '$ne') return 'is not'
-    if (op === '$eq') return 'is'
+    // No dialect except Postgres has an ILIKE keyword. MySQL's default collation
+    // is case-insensitive and SQLite's LIKE is case-insensitive for ASCII, so
+    // plain LIKE gives equivalent behavior for typical input (case folding of
+    // non-ASCII on SQLite/MySQL depends on the column collation).
+    if (op === '$iLike' && this.options.dialectType !== 'postgres') {
+      return 'like'
+    }
+
     return OPERATORS[op]
   }
 
@@ -918,14 +982,14 @@ export class KyselyAdapter<
       throw new BadRequest(`The value for '${op}' must be an array`)
     }
 
-    // For PostgreSQL, we need to help with type inference
-    // Cast based on the first element's type
+    // These are the Postgres array operators (@>, <@, &&). Build a properly
+    // typed array literal with every element bound as a parameter, casting
+    // based on the first element's type so Postgres can infer the array type.
     const firstElement = value[0]
     if (typeof firstElement === 'number') {
       return sql`ARRAY[${sql.join(value)}]::integer[]`
     } else if (typeof firstElement === 'string') {
-      return sql`${JSON.stringify(value)}`
-      //return sql`ARRAY[${sql.join(value)}]::varchar[]`
+      return sql`ARRAY[${sql.join(value)}]::text[]`
     } else {
       // Default case - let PostgreSQL try to infer
       return sql`ARRAY[${sql.join(value)}]`
@@ -1156,27 +1220,59 @@ export class KyselyAdapter<
     })
 
     if (paginate && paginate.default) {
-      const countQuery = this.composeQuery(params, {
-        select: [
-          this.db(params).fn.count(this.col(this.options.id)).as('total'),
-        ],
-        where: true,
-      })
+      const runCountQuery = () =>
+        this.composeQuery(params, {
+          select: [
+            this.db(params).fn.count(this.col(this.options.id)).as('total'),
+          ],
+          where: true,
+        })
+          .executeTakeFirst()
+          .catch(errorHandler)
 
-      const [queryResult, countQueryResult] = await Promise.all([
-        filters.$limit !== 0 ? q.execute().catch(errorHandler) : undefined,
-        countQuery.executeTakeFirst().catch(errorHandler),
-      ])
-
-      const data = filters.$limit === 0 ? [] : queryResult
-      const total = Number((countQueryResult as any)?.total ?? 0) || 0
-
-      return {
-        total,
+      const buildResult = (total: any, data: Result[]): Paginated<Result> => ({
+        total: Number((total as any)?.total ?? total ?? 0) || 0,
         limit: filters.$limit!,
         skip: filters.$skip || 0,
-        data: data as Result[],
+        data,
+      })
+
+      // Count-only request ($limit === 0): skip the data query entirely.
+      if (filters.$limit === 0) {
+        return buildResult(await runCountQuery(), [])
       }
+
+      const { dialectType } = this.options
+
+      // Postgres & SQLite: fetch the rows and the grand total in a single
+      // round-trip via a window count. Window functions are evaluated over the
+      // full filtered set before LIMIT/OFFSET, so the total is correct even when
+      // a page is requested. Fall back to a separate count only when the page is
+      // empty (e.g. $skip past the end), where no row carries the total.
+      if (dialectType === 'postgres' || dialectType === 'sqlite') {
+        const rows = (await (q as any)
+          .select(sql`count(*) over()`.as(PAGINATION_TOTAL_KEY))
+          .execute()
+          .catch(errorHandler)) as any[]
+
+        if (rows.length > 0) {
+          const total = Number(rows[0][PAGINATION_TOTAL_KEY] ?? 0) || 0
+          for (const row of rows) {
+            delete row[PAGINATION_TOTAL_KEY]
+          }
+          return buildResult(total, rows as Result[])
+        }
+
+        return buildResult(await runCountQuery(), [])
+      }
+
+      // Other dialects: run the data and count queries in parallel.
+      const [queryResult, countQueryResult] = await Promise.all([
+        q.execute().catch(errorHandler),
+        runCountQuery(),
+      ])
+
+      return buildResult(countQueryResult, queryResult as Result[])
     }
 
     const data =
@@ -1218,6 +1314,11 @@ export class KyselyAdapter<
       options: KyselyAdapterOptionsDefined
       params: ServiceParams
       $select?: string[]
+      /**
+       * The original input data, used (MySQL only) to recover explicitly
+       * supplied primary keys when re-fetching the written rows.
+       */
+      data?: any
       buildWhere?: (
         query: SelectQueryBuilder<any, any, any>,
       ) => SelectQueryBuilder<any, any, any>
@@ -1249,12 +1350,49 @@ export class KyselyAdapter<
         : query.executeTakeFirst().catch(errorHandler)
     }
 
-    // Standard insert logic (build WHERE based on insertId)
-    const { insertId, numInsertedOrUpdatedRows } = response as any
-    const id = Number(insertId)
-    const count = Number(numInsertedOrUpdatedRows)
+    // Standard insert logic: figure out which rows to re-fetch. MySQL has no
+    // RETURNING, so we identify the written rows by their primary key.
+    const rows: any[] = isArray
+      ? Array.isArray(context.data)
+        ? context.data
+        : []
+      : context.data != null
+        ? [context.data]
+        : []
 
-    const ids = isArray ? [...Array(count).keys()].map((i) => id + i) : [id]
+    const suppliedIds = rows
+      .map((row) => (row == null ? undefined : row[idField]))
+      .filter((value) => value !== undefined && value !== null)
+
+    let ids: any[]
+    if (suppliedIds.length > 0 && suppliedIds.length === rows.length) {
+      // Every inserted row carried an explicit primary key (e.g. UUID or
+      // application-assigned id) — re-fetch by those, never by guessing.
+      ids = suppliedIds
+    } else {
+      // Fall back to MySQL's auto-increment block, which starts at insertId and
+      // is contiguous for a single multi-row INSERT. Guard against a missing /
+      // non-numeric insertId (e.g. a non-auto-increment key with no value).
+      const { insertId, numInsertedOrUpdatedRows } = response as any
+      const firstId = Number(insertId)
+      const count = Number(numInsertedOrUpdatedRows ?? 1)
+
+      if (
+        !Number.isFinite(firstId) ||
+        firstId <= 0 ||
+        !Number.isFinite(count) ||
+        count <= 0
+      ) {
+        throw new GeneralError(
+          'Unable to determine the id(s) of the inserted MySQL row(s). ' +
+            'Provide an explicit id in the data, or use a dialect that supports RETURNING.',
+        )
+      }
+
+      ids = isArray
+        ? Array.from({ length: count }, (_, i) => firstId + i)
+        : [firstId]
+    }
 
     const where =
       ids.length === 1
@@ -1491,6 +1629,7 @@ export class KyselyAdapter<
       options,
       params,
       $select,
+      data: _data,
     })
 
     return response
@@ -1552,6 +1691,7 @@ export class KyselyAdapter<
       options,
       params,
       $select,
+      data: _data,
       buildWhere:
         dialectType === 'mysql' && onConflictFields.length > 0
           ? (selected) =>
@@ -1601,36 +1741,39 @@ export class KyselyAdapter<
               $select && Array.isArray($select) ? this.col($select) : $select
             const selected = select ? from.select(select) : from.selectAll(name)
 
-            // Build OR conditions for each conflict field combination
-            const missingRecords: Result[] = []
-            for (const item of dataArray) {
-              // Check if this item is already in the response
-              const isInResponse = responseArray.some((r) =>
-                onConflictFields.every((field) => {
-                  const rVal = r[field as keyof Result]
-                  const itemVal = item[field as keyof Data]
-                  return rVal === (itemVal as any)
-                }),
+            const matchesConflict = (row: any, item: any) =>
+              onConflictFields.every(
+                (field) =>
+                  row[field as keyof Result] ===
+                  (item[field as keyof Data] as any),
               )
 
-              if (!isInResponse) {
-                // Fetch the existing record
-                let query = selected
-                for (const field of onConflictFields) {
-                  query = query.where(
-                    this.col(field as string),
-                    '=',
-                    item[field as keyof Data],
-                  ) as any
-                }
-                const existing = await query
-                  .executeTakeFirst()
-                  .catch(errorHandler)
-                if (existing) {
-                  missingRecords.push(existing as Result)
-                }
-              }
+            // Items that were ignored (already existed) and thus not returned.
+            const missingItems = dataArray.filter(
+              (item) => !responseArray.some((r) => matchesConflict(r, item)),
+            )
+
+            if (missingItems.length === 0) {
+              return responseArray
             }
+
+            // Fetch all missing rows in a SINGLE round-trip (one OR-of-ANDs
+            // SELECT) instead of one SELECT per item.
+            const existingRows = (await this.buildWhereForConflictFields(
+              selected,
+              missingItems,
+              onConflictFields,
+              true,
+            )
+              .execute()
+              .catch(errorHandler)) as Result[]
+
+            // Re-order to follow the input order and drop any not found.
+            const missingRecords = missingItems
+              .map((item) =>
+                existingRows.find((row) => matchesConflict(row, item)),
+              )
+              .filter((row): row is Result => !!row)
 
             return [...responseArray, ...missingRecords] as Result[]
           }
@@ -1824,15 +1967,26 @@ export class KyselyAdapter<
     }
 
     const data = _.omit(_data, this.id)
+
+    // Replacing a record nulls out every column absent from `data`, so we need
+    // the full set of column names. When `properties` is configured (the same
+    // map col() treats as the known columns) we read only the id for the
+    // existence check; otherwise we fall back to reading the whole row.
+    const knownColumns =
+      this.propertyMap.size > 0 ? [...this.propertyMap.keys()] : undefined
+
     const oldData = await this._get(id, {
       ...params,
       query: {
         ...params.query,
-        $select: undefined,
+        $select: knownColumns ? [this.id] : undefined,
       },
     })
+
+    const columns = knownColumns ?? Object.keys(oldData)
+
     // New data changes all fields except id
-    const newObject = Object.keys(oldData).reduce((result: any, key) => {
+    const newObject = columns.reduce((result: any, key) => {
       if (key !== this.id) {
         result[key] = data[key] === undefined ? null : data[key]
       }

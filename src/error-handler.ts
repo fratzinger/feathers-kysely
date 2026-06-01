@@ -14,7 +14,11 @@ export const ERROR = Symbol.for('feathers-kysely/error')
  * Convert a database error into a Feathers error.
  */
 export function errorHandler(error: any): never {
-  const { message } = error
+  // `message` is the text surfaced to API clients. It is mutable because the
+  // Postgres branch below strips the query fragment from it before it is used
+  // to construct the Feathers error (the raw error is still preserved on
+  // `feathersError[ERROR]` for server-side logging).
+  let { message } = error
   let feathersError = error
 
   if (error.sqlState && error.sqlState.length) {
@@ -79,10 +83,11 @@ export function errorHandler(error: any): never {
   ) {
     // NOTE: Error codes taken from
     // https://www.postgresql.org/docs/9.6/static/errcodes-appendix.html
-    // Omit query information
+    // Omit query information from the client-facing message (the raw message
+    // remains available on feathersError[ERROR]).
     const messages = (error.message || '').split('-')
 
-    error.message = messages[messages.length - 1]
+    message = messages[messages.length - 1].trim()
 
     switch (error.code.slice(0, 2)) {
       case '22':

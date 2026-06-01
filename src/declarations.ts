@@ -5,7 +5,7 @@ import type {
 } from '@feathersjs/adapter-commons'
 import type { ControlledTransaction, Kysely } from 'kysely'
 
-export type DialectType = 'mysql' | 'postgres' | 'sqlite' | 'mssql'
+export type DialectType = 'mysql' | 'postgres' | 'sqlite'
 
 export type Relation = {
   service: string

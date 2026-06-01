@@ -1,10 +1,10 @@
 import { sql } from 'kysely'
+import type { OrderByItemBuilder } from 'kysely'
 import type {
-  OrderByItemBuilder,
-  ExpressionBuilder,
-  StringReference,
-} from 'kysely'
-import type { SortDirection, SortProperty } from './declarations.js'
+  DialectType,
+  SortDirection,
+  SortProperty,
+} from './declarations.js'
 import { Unprocessable } from '@feathersjs/errors'
 
 export function applySelectId($select: string[] | undefined, idField: string) {
@@ -12,25 +12,35 @@ export function applySelectId($select: string[] | undefined, idField: string) {
   return $select.includes(idField) ? $select : $select.concat(idField)
 }
 
-export function traverseJSON<DB, TB extends keyof DB>(
-  eb: ExpressionBuilder<DB, TB>,
-  column: StringReference<DB, TB>,
+/**
+ * Build a JSON-path accessor expression for a column.
+ *
+ * Every path segment is bound as a SQL parameter (never interpolated as raw
+ * SQL), so attacker-controlled query keys cannot inject SQL. The accessor is
+ * dialect-specific: Postgres uses the native `->` / `->>` operators, while
+ * SQLite and MySQL use `json_extract(col, '$.a.b')`.
+ */
+export function traverseJSON(
+  column: string,
   path: string[],
+  dialectType: DialectType = 'postgres',
 ) {
   if (!path.length) {
     throw new Unprocessable('Path must have at least one element')
   }
 
-  const accessor = path
-    .slice(0, -1)
-    .map((p) => `'${p}'`)
-    .join('->')
-  const finalKey = path[path.length - 1]
-
-  if (accessor) {
-    return sql`${sql.ref(column)}->${sql.raw(accessor)}->>'${sql.raw(finalKey)}'`
+  if (dialectType === 'sqlite' || dialectType === 'mysql') {
+    // The whole path is passed as a single bound parameter to json_extract.
+    const jsonPath = `$${path.map((p) => `.${p}`).join('')}`
+    return sql`json_extract(${sql.ref(column)}, ${jsonPath})`
   }
-  return sql`${sql.ref(column)}->>'${sql.raw(finalKey)}'`
+
+  // Postgres: col -> 'a' -> 'b' ->> 'c', each key bound as a parameter.
+  let expr = sql`${sql.ref(column)}`
+  for (const key of path.slice(0, -1)) {
+    expr = sql`${expr}->${key}`
+  }
+  return sql`${expr}->>${path[path.length - 1]}`
 }
 
 export function convertBooleansToNumbers<T>(data: T): T {

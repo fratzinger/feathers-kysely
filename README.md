@@ -6,7 +6,7 @@
 
 > A [FeathersJS](https://feathersjs.com/) database adapter for [Kysely](https://kysely.dev/) — the type-safe SQL query builder.
 
-Supports **PostgreSQL**, **MySQL**, **SQLite**, and **MSSQL**.
+Supports **PostgreSQL**, **MySQL**, and **SQLite**.
 
 ## Installation
 

@@ -562,6 +562,25 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
     expect(log).toEqual(['create', 'commit:root', 'event'])
   })
 
+  it('a throwing event listener does not roll back a committed transaction', async () => {
+    const log: string[] = []
+    const app = appWith(['s', new StubService(log)])
+    const s = app.service('s')
+    s.hooks({ around: { create: [withTransaction()] } })
+
+    s.on('created', () => {
+      log.push('event')
+      throw new Error('listener boom')
+    })
+
+    // The transaction already committed before events are flushed, so a
+    // throwing listener must neither reject the call nor trigger a rollback.
+    await expect(s.create({ a: 1 })).resolves.toMatchObject({ id: 1 })
+
+    expect(log).toContain('commit:root')
+    expect(log).not.toContain('rollback:root')
+  })
+
   it('rolls back and emits nothing when an after hook throws', async () => {
     const log: string[] = []
     const app = appWith(['s', new StubService(log)])

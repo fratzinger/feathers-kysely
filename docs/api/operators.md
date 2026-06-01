@@ -21,7 +21,7 @@ All standard [Feathers query operators](https://feathersjs.com/api/databases/que
 | ------------ | --------------- | ---------------------------------------------- |
 | `$like`      | `LIKE`          | Pattern matching                               |
 | `$notLike`   | `NOT LIKE`      | Negated pattern matching                       |
-| `$iLike`     | `ILIKE`         | Case-insensitive pattern matching (PostgreSQL) |
+| `$iLike`     | `ILIKE` / `LIKE`| Case-insensitive pattern matching (Postgres uses `ILIKE`; MySQL/SQLite fall back to `LIKE`, which is case-insensitive for ASCII) |
 
 ## Array Operators (PostgreSQL)
 

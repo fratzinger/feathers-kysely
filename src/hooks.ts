@@ -76,24 +76,29 @@ const commitTransaction = async (
 ): Promise<void> => {
   const { trx, id, savepoint } = transaction
 
-  if (savepoint) {
-    await (trx as any).releaseSavepoint(savepoint).execute()
-  } else {
-    await trx.commit().execute()
+  try {
+    if (savepoint) {
+      await (trx as any).releaseSavepoint(savepoint).execute()
+    } else {
+      await trx.commit().execute()
+    }
+  } catch (error) {
+    // A failing COMMIT / RELEASE SAVEPOINT must still release anything awaiting
+    // `transaction.committed`, otherwise those awaiters hang forever.
+    if (transaction.resolve) {
+      transaction.resolve(false)
+    }
+    throw error
   }
 
   if (transaction.resolve) {
     transaction.resolve(true)
   }
 
-  // Only the root flushes the shared deferred-event queue.
-  if (!transaction.parent && transaction.deferredEvents) {
-    const queue = transaction.deferredEvents
-    transaction.deferredEvents = []
-    for (const emit of queue) {
-      emit()
-    }
-  }
+  // NOTE: deferred events are intentionally NOT flushed here. The caller flushes
+  // them after the commit succeeds (see flushDeferredEvents), so that a throwing
+  // event listener cannot bubble up and trigger a rollback of an already
+  // committed transaction.
 
   debug('ended transaction %s', id)
 }
@@ -103,22 +108,49 @@ const rollbackTransaction = async (
 ): Promise<void> => {
   const { trx, id, savepoint } = transaction
 
-  if (savepoint) {
-    await (trx as any).rollbackToSavepoint(savepoint).execute()
-  } else {
-    await trx.rollback().execute()
-  }
+  try {
+    if (savepoint) {
+      await (trx as any).rollbackToSavepoint(savepoint).execute()
+    } else {
+      await trx.rollback().execute()
+    }
+  } finally {
+    // Always release awaiters and discard deferred events, even if the
+    // rollback statement itself fails.
+    if (transaction.resolve) {
+      transaction.resolve(false)
+    }
 
-  if (transaction.resolve) {
-    transaction.resolve(false)
-  }
-
-  // Only the root owns the queue; discard everything that was deferred.
-  if (!transaction.parent && transaction.deferredEvents) {
-    transaction.deferredEvents.length = 0
+    // Only the root owns the queue; discard everything that was deferred.
+    if (!transaction.parent && transaction.deferredEvents) {
+      transaction.deferredEvents.length = 0
+    }
   }
 
   debug('rolled back transaction %s', id)
+}
+
+/**
+ * Flush the root transaction's deferred Feathers events after a successful
+ * commit. Each emitter is isolated so a throwing listener can neither abort the
+ * remaining events nor bubble up and roll back the already-committed
+ * transaction. No-op for nested (savepoint) transactions and for legacy
+ * transactions that never deferred events.
+ */
+const flushDeferredEvents = (transaction: KyselyAdapterTransaction): void => {
+  if (transaction.parent || !transaction.deferredEvents) {
+    return
+  }
+
+  const queue = transaction.deferredEvents
+  transaction.deferredEvents = []
+  for (const emit of queue) {
+    try {
+      emit()
+    } catch (error) {
+      debug('deferred event listener threw %o', error)
+    }
+  }
 }
 
 /**
@@ -246,4 +278,8 @@ export const withTransaction =
         context.params = { ...context.params, transaction: parent }
       }
     }
+
+    // Reached only on the success path (the catch above rethrows). Emit the
+    // deferred events now that the (root) transaction is durably committed.
+    flushDeferredEvents(transaction)
   }
