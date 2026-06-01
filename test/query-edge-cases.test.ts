@@ -2,7 +2,7 @@ import type { Generated } from 'kysely'
 import { Kysely } from 'kysely'
 import assert from 'node:assert'
 import { feathers } from '@feathersjs/feathers'
-import dialect from './dialect.js'
+import dialect, { getDialect } from './dialect.js'
 
 import { KyselyService } from '../src/index.js'
 import { describe, it } from 'vitest'
@@ -294,6 +294,155 @@ describe('query edge cases', () => {
         () => app.service('users').patch(999_999, {}),
         (err: any) => err.name === 'NotFound',
       )
+    })
+  })
+
+  // MARK: Empty logical operators
+
+  describe('empty $or / $and', () => {
+    it('empty $or matches no rows', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 1 },
+        { name: 'b', age: 2 },
+      ])
+      const result = await app
+        .service('users')
+        .find({ query: { $or: [] }, paginate: false })
+      assert.strictEqual(result.length, 0)
+    })
+
+    it('empty $and matches all rows', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 1 },
+        { name: 'b', age: 2 },
+      ])
+      const result = await app
+        .service('users')
+        .find({ query: { $and: [] as any }, paginate: false })
+      assert.strictEqual(result.length, 2)
+    })
+  })
+
+  // MARK: Pagination clamping & stability
+
+  describe('pagination clamping', () => {
+    it('negative $limit does not error (clamped)', async () => {
+      await app.service('users').create({ name: 'a', age: 1 })
+      const result = await app
+        .service('users')
+        .find({ query: { $limit: -5 }, paginate: false })
+      assert.ok(Array.isArray(result))
+    })
+
+    it('negative $skip does not error (clamped to 0)', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 1 },
+        { name: 'b', age: 2 },
+      ])
+      const result = await app.service('users').find({
+        query: { $skip: -3, $sort: { id: 1 } },
+        paginate: false,
+      })
+      assert.strictEqual(result.length, 2)
+    })
+
+    it('paginated find without $sort is stable via id tiebreaker', async () => {
+      await app
+        .service('users')
+        .create(
+          Array.from({ length: 5 }, (_, i) => ({ name: `n${i}`, age: i })),
+        )
+
+      const page1 = await app
+        .service('users')
+        .find({ query: { $limit: 2, $skip: 0 }, paginate: false })
+      const page2 = await app
+        .service('users')
+        .find({ query: { $limit: 2, $skip: 2 }, paginate: false })
+
+      const ids1 = page1.map((u) => u.id)
+      const ids2 = page2.map((u) => u.id)
+
+      assert.strictEqual(ids1.length, 2)
+      assert.strictEqual(ids2.length, 2)
+      // Consecutive pages must not overlap → deterministic ordering applied.
+      assert.ok(!ids1.some((id) => ids2.includes(id)))
+      assert.ok(Math.max(...ids1) < Math.min(...ids2))
+    })
+  })
+
+  // MARK: Dialect operator handling
+
+  describe('dialect operator handling', () => {
+    it('$iLike matches case-insensitively', async () => {
+      await app.service('users').create([
+        { name: 'Alice', age: 1 },
+        { name: 'BOB', age: 2 },
+      ])
+
+      const result = await app.service('users').find({
+        query: { name: { $iLike: '%alice%' } },
+        paginate: false,
+      })
+
+      assert.strictEqual(result.length, 1)
+      assert.strictEqual(result[0].name, 'Alice')
+    })
+
+    it.skipIf(getDialect() === 'postgres')(
+      '$contains is rejected with BadRequest on non-Postgres dialects',
+      async () => {
+        await assert.rejects(
+          () =>
+            app.service('users').find({
+              query: { name: { $contains: ['x'] } as any },
+              paginate: false,
+            }),
+          (err: any) => err.name === 'BadRequest',
+        )
+      },
+    )
+  })
+
+  // MARK: Window-count pagination
+
+  describe('paginated total', () => {
+    const paginated = new KyselyService<any>({
+      Model: db,
+      name: 'users',
+      paginate: { default: 10, max: 100 },
+    })
+
+    it('$skip past the end returns the real total with empty data', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 1 },
+        { name: 'b', age: 2 },
+        { name: 'c', age: 3 },
+      ])
+
+      const result = (await paginated.find({ query: { $skip: 100 } })) as any
+      assert.strictEqual(result.total, 3)
+      assert.strictEqual(result.data.length, 0)
+      assert.strictEqual(result.skip, 100)
+    })
+
+    it('$select returns the correct total and strips the helper column', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 1 },
+        { name: 'b', age: 2 },
+        { name: 'c', age: 3 },
+      ])
+
+      const result = (await paginated.find({
+        query: { $select: ['name'], $limit: 2 },
+      })) as any
+
+      assert.strictEqual(result.total, 3)
+      assert.strictEqual(result.data.length, 2)
+      for (const row of result.data) {
+        assert.ok(!('__fk_total' in row), 'window-count helper column leaked')
+        assert.ok('name' in row)
+      }
     })
   })
 })

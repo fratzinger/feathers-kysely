@@ -1,5 +1,5 @@
 import assert from 'node:assert'
-import { errorHandler } from '../src/index.js'
+import { errorHandler, ERROR } from '../src/index.js'
 
 describe('Kysely Error handler', () => {
   it('sqlState', () => {
@@ -87,5 +87,30 @@ describe('Kysely Error handler', () => {
         name: 'GeneralError',
       },
     )
+  })
+
+  it('omits query information from the postgres client message but keeps the raw error', () => {
+    const raw = {
+      code: '23505',
+      message:
+        'Failing query: INSERT INTO users (email) VALUES ($1) - duplicate key value violates unique constraint',
+      severity: 'ERROR',
+      routine: 'exec_stmt',
+    }
+
+    try {
+      errorHandler(raw)
+      assert.fail('errorHandler should have thrown')
+    } catch (err: any) {
+      assert.strictEqual(err.name, 'BadRequest')
+      // The query fragment before the dash must not reach the client message.
+      assert.strictEqual(
+        err.message,
+        'duplicate key value violates unique constraint',
+      )
+      assert.ok(!err.message.includes('INSERT INTO users'))
+      // The original, un-stripped error is preserved for server-side logging.
+      assert.strictEqual(err[ERROR], raw)
+    }
   })
 })

@@ -7,7 +7,7 @@ hero:
     alt: feathers-kysely logo
   name: feathers-kysely
   text: Type-safe SQL for FeathersJS
-  tagline: A database adapter for Kysely — the type-safe SQL query builder. Supports PostgreSQL, MySQL, SQLite, and MSSQL.
+  tagline: A database adapter for Kysely — the type-safe SQL query builder. Supports PostgreSQL, MySQL, and SQLite.
   actions:
     - theme: brand
       text: Get Started
@@ -24,5 +24,5 @@ features:
   - title: Transactions
     details: Full transaction support with hooks or manual control, including nested savepoints.
   - title: Multi-dialect
-    details: Works with PostgreSQL, MySQL, SQLite, and MSSQL out of the box.
+    details: Works with PostgreSQL, MySQL, and SQLite out of the box.
 ---

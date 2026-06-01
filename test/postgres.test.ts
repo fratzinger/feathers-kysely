@@ -216,4 +216,31 @@ describe.skipIf(dialectName !== 'postgres')('postgres', () => {
       expect(queried[1].jsonb).toEqual({ a: { b: { c: 3 } } })
     })
   })
+
+  describe('security', () => {
+    it('json path key injection is parameterized', async () => {
+      await app.service('postgres').create({ jsonb: { name: 'safe' } })
+
+      // A single-quote in a JSON path segment used to break out of the literal
+      // when built with sql.raw. It is now bound as a parameter, so the query
+      // runs (matching nothing) and the table is left intact.
+      const finalKeyInjection = await app.service('postgres').find({
+        query: { "jsonb.name'); DROP TABLE postgres; --": 'x' },
+        paginate: false,
+      })
+      expect(finalKeyInjection).toHaveLength(0)
+
+      // Same for an intermediate accessor segment.
+      const intermediateInjection = await app.service('postgres').find({
+        query: { "jsonb.a'; DROP TABLE postgres; --.b": 'x' },
+        paginate: false,
+      })
+      expect(intermediateInjection).toHaveLength(0)
+
+      // The table still exists and the original row is intact.
+      const all = await app.service('postgres').find({ paginate: false })
+      expect(all).toHaveLength(1)
+      expect(all[0].jsonb).toEqual({ name: 'safe' })
+    })
+  })
 })
