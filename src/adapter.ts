@@ -41,9 +41,11 @@ import type {
 } from 'kysely'
 import {
   applySelectId,
+  coerceTemporalQueryProperty,
   convertBooleansToNumbers,
   getOrderByModifier,
   getSortDirection,
+  temporalKind,
   traverseJSON,
 } from './utils.js'
 import { addToQuery } from 'feathers-utils'
@@ -819,20 +821,38 @@ export class KyselyAdapter<
     return subQueries.length === 0 ? undefined : eb.and(subQueries)
   }
 
+  /**
+   * Resolve the database type of a column, used for JSON traversal and opt-in
+   * temporal date coercion. An explicit `getPropertyType` option wins; when it
+   * is absent (or returns `undefined`) we fall back to an `x-db-type`
+   * annotation on the column's entry in `properties` (typically the service's
+   * JSON schema `properties` block).
+   */
+  private getPropertyType(property: string): string | undefined {
+    const explicit = this.options.getPropertyType?.(property)
+    if (explicit != null) return explicit
+
+    const meta = this.propertyMap.get(property)
+    if (meta && typeof meta === 'object') {
+      const annotated = (meta as Record<string, any>)['x-db-type']
+      if (typeof annotated === 'string') return annotated
+    }
+
+    return undefined
+  }
+
   private handleJson(
     eb: ExpressionBuilder<any, any>,
     queryKey: string,
     queryProperty: any,
   ) {
-    if (!this.options.getPropertyType) return
-
     if (!queryKey.includes('.')) {
       return
     }
 
     const parts = queryKey.split('.')
 
-    const type = this.options.getPropertyType(parts[0])
+    const type = this.getPropertyType(parts[0])
 
     if (type !== 'json' && type !== 'jsonb') {
       return
@@ -915,7 +935,16 @@ export class KyselyAdapter<
 
     const col = this.col(queryKey, { tableName: options?.tableName })
 
-    return this.buildPropertyExpression(eb, col, queryProperty)
+    // Opt-in, type-aware date coercion: when the column is declared temporal
+    // (via `getPropertyType` or an `x-db-type` schema annotation), normalize
+    // Date / ISO-string / epoch-ms / "YYYY-MM-DD" query values into the
+    // canonical string the driver compares correctly.
+    const kind = temporalKind(this.getPropertyType(queryKey))
+    const property = kind
+      ? coerceTemporalQueryProperty(queryProperty, kind)
+      : queryProperty
+
+    return this.buildPropertyExpression(eb, col, property)
   }
 
   private applyJoinsForOrderBy<Q extends Record<string, any>>(

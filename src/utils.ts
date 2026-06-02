@@ -93,6 +93,105 @@ export function convertBooleansToNumbers<T>(data: T): T {
   return modified ? result : data
 }
 
+// Recognized temporal column kinds for opt-in date coercion. 'instant' covers
+// timestamp/timestamptz/datetime columns; 'date' is a calendar day with no time.
+export type TemporalKind = 'instant' | 'date'
+
+/**
+ * Map a `getPropertyType` return value to a temporal coercion kind, or
+ * `undefined` when the type is not a recognized temporal type (so no coercion
+ * happens). Matching is case-insensitive: anything containing "timestamp" or
+ * equal to "datetime" is an instant; an exact "date" is a calendar day.
+ */
+export function temporalKind(type: unknown): TemporalKind | undefined {
+  if (typeof type !== 'string') return undefined
+  const t = type.toLowerCase()
+  if (t === 'datetime' || t.includes('timestamp')) return 'instant'
+  if (t === 'date') return 'date'
+  return undefined
+}
+
+/**
+ * Normalize a single query value for a temporal column into the canonical
+ * string representation that every supported driver compares correctly: a full
+ * ISO-8601 UTC string for an instant column, or a "YYYY-MM-DD" string for a date
+ * column. Accepts a Date, an epoch-millisecond number, an ISO string, or a
+ * "YYYY-MM-DD" string. Normalization is done in UTC. Values that cannot be
+ * parsed into a valid date (including null) are returned unchanged.
+ */
+export function coerceTemporalValue(
+  value: unknown,
+  kind: TemporalKind,
+): unknown {
+  if (value == null) return value
+
+  let date: Date
+  if (value instanceof Date) {
+    date = value
+  } else if (typeof value === 'number' || typeof value === 'string') {
+    date = new Date(value)
+  } else {
+    return value
+  }
+
+  if (Number.isNaN(date.getTime())) return value
+
+  const iso = date.toISOString()
+  return kind === 'date' ? iso.slice(0, 10) : iso
+}
+
+// Comparison operators whose values are temporal scalars (or arrays of them).
+// Pattern operators ($like, …) and the Postgres array operators are excluded so
+// their values are never reinterpreted as dates.
+const TEMPORAL_OPERATORS = new Set([
+  '$lt',
+  '$lte',
+  '$gt',
+  '$gte',
+  '$eq',
+  '$ne',
+  '$in',
+  '$nin',
+])
+
+/**
+ * Coerce the value side of a single column's query for a temporal column. The
+ * input is either a bare value (`{ col: value }`) or an operator object
+ * (`{ col: { $gt: value, $in: [...] } }`). Operator keys and non-temporal
+ * operators are left untouched; only the leaf values of temporal comparison
+ * operators (and bare equality) are normalized via `coerceTemporalValue`.
+ */
+export function coerceTemporalQueryProperty(
+  queryProperty: any,
+  kind: TemporalKind,
+): any {
+  // An operator object like { $gt: ..., $in: [...] }. A Date is an object too,
+  // so treat only record-like objects as operator maps; a Date/array/scalar is
+  // a bare value.
+  if (
+    queryProperty !== null &&
+    typeof queryProperty === 'object' &&
+    !(queryProperty instanceof Date) &&
+    !Array.isArray(queryProperty)
+  ) {
+    const out: Record<string, any> = {}
+    for (const operator in queryProperty) {
+      const value = queryProperty[operator]
+      if (!TEMPORAL_OPERATORS.has(operator)) {
+        out[operator] = value
+        continue
+      }
+      out[operator] = Array.isArray(value)
+        ? value.map((v) => coerceTemporalValue(v, kind))
+        : coerceTemporalValue(value, kind)
+    }
+    return out
+  }
+
+  // Bare value: { col: dateLike }
+  return coerceTemporalValue(queryProperty, kind)
+}
+
 export function getSortDirection(order: SortProperty): SortDirection {
   if (typeof order === 'object' && order !== null && 'direction' in order) {
     return order.direction
