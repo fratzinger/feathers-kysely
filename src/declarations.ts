@@ -24,11 +24,43 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
   dialectType?: DialectType
   // TODO
   relations?: Record<string, Relation>
-  // TODO
-  properties?: Record<string, any>
-  getPropertyType?: (
-    property: string,
-  ) => 'json' | 'jsonb' | (string & {}) | undefined
+  /**
+   * Map of column name → JSON schema property object (typically the service's
+   * schema `properties` block). Used as the set of known columns and as a
+   * declarative source for the column's database type via an `x-db-type`
+   * annotation, e.g. `{ createdAt: { type: 'string', 'x-db-type': 'timestamptz' } }`.
+   * An explicit `getPropertyType` takes precedence over `x-db-type`.
+   */
+  properties?: Record<string, PropertySchema | true>
+  /**
+   * Resolve the database type of a column. Takes precedence over an
+   * `x-db-type` annotation in `properties`; return `undefined` to fall back to
+   * the annotation (or to no special handling).
+   */
+  getPropertyType?: (property: string) => DbPropertyType | undefined
+}
+
+/**
+ * Database type of a column. `json`/`jsonb` enable dot-notation traversal into
+ * JSON columns; the temporal types enable opt-in, type-aware date coercion of
+ * query values (Date / ISO string / epoch-ms / "YYYY-MM-DD") on the column.
+ */
+export type DbPropertyType =
+  | 'json'
+  | 'jsonb'
+  | 'date'
+  | 'timestamp'
+  | 'timestamptz'
+  | 'datetime'
+  | (string & {})
+
+/**
+ * A JSON schema property object. Arbitrary keywords are allowed; `x-db-type`
+ * is read by the adapter to determine the column's database type.
+ */
+export type PropertySchema = {
+  'x-db-type'?: DbPropertyType
+  [key: string]: any
 }
 
 export interface KyselyAdapterTransaction {
