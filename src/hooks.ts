@@ -1,6 +1,5 @@
 import { createDebug } from '@feathersjs/commons'
 import type { HookContext, NextFunction } from '@feathersjs/feathers'
-import { getServiceOptions } from '@feathersjs/feathers'
 import type { ControlledTransaction, Kysely } from 'kysely'
 import type {
   KyselyAdapterParams,
@@ -249,7 +248,11 @@ export const withTransaction =
       const self = context.self
       const event = context.event
       if (typeof event === 'string' && transaction.deferredEvents) {
-        const events = getServiceOptions(self).events ?? []
+        // Mirrors @feathersjs/feathers' eventHook: skip the default emit when the
+        // service declares this event itself. We read `self.events` directly instead
+        // of `getServiceOptions()` to avoid a value import of the CJS-only
+        // @feathersjs/feathers, which breaks our ESM consumers.
+        const events: string[] = (self as any).events ?? []
         if (!events.includes(event)) {
           const results = Array.isArray(context.result)
             ? context.result
