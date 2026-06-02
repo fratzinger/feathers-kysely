@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { version } from '../../package.json'
 
 export default defineConfig({
   title: 'feathers-kysely',
@@ -11,6 +12,19 @@ export default defineConfig({
       { text: 'Guide', link: '/getting-started' },
       { text: 'API', link: '/api/service' },
       { text: 'Relations', link: '/relations/setup' },
+      {
+        text: `v${version}`,
+        items: [
+          {
+            text: 'Release Notes',
+            link: 'https://github.com/fratzinger/feathers-kysely/releases',
+          },
+          {
+            text: 'npm',
+            link: 'https://www.npmjs.com/package/@fratzinger/feathers-kysely',
+          },
+        ],
+      },
     ],
 
     sidebar: [
