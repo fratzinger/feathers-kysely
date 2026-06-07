@@ -150,6 +150,14 @@ export class KyselyAdapter<
 
   private propertyMap: Map<string, any>
 
+  /**
+   * Per-instance `.catch()` handler converting database errors into Feathers
+   * errors. Passes the known columns (`properties`) so the client-facing
+   * Postgres message keeps declared column names but strips other identifiers.
+   */
+  private handleError = (error: any): never =>
+    errorHandler(error, this.propertyMap)
+
   declare app: any
 
   constructor(options: KyselyAdapterOptions, app?: any) {
@@ -1257,7 +1265,7 @@ export class KyselyAdapter<
           where: true,
         })
           .executeTakeFirst()
-          .catch(errorHandler)
+          .catch(this.handleError)
 
       const buildResult = (total: any, data: Result[]): Paginated<Result> => ({
         total: Number((total as any)?.total ?? total ?? 0) || 0,
@@ -1282,7 +1290,7 @@ export class KyselyAdapter<
         const rows = (await (q as any)
           .select(sql`count(*) over()`.as(PAGINATION_TOTAL_KEY))
           .execute()
-          .catch(errorHandler)) as any[]
+          .catch(this.handleError)) as any[]
 
         if (rows.length > 0) {
           const total = Number(rows[0][PAGINATION_TOTAL_KEY] ?? 0) || 0
@@ -1297,7 +1305,7 @@ export class KyselyAdapter<
 
       // Other dialects: run the data and count queries in parallel.
       const [queryResult, countQueryResult] = await Promise.all([
-        q.execute().catch(errorHandler),
+        q.execute().catch(this.handleError),
         runCountQuery(),
       ])
 
@@ -1305,7 +1313,7 @@ export class KyselyAdapter<
     }
 
     const data =
-      filters.$limit === 0 ? [] : await q.execute().catch(errorHandler)
+      filters.$limit === 0 ? [] : await q.execute().catch(this.handleError)
     return data as Result[]
   }
 
@@ -1324,7 +1332,7 @@ export class KyselyAdapter<
       where: true,
     })
 
-    const item = await q.executeTakeFirst().catch(errorHandler)
+    const item = await q.executeTakeFirst().catch(this.handleError)
 
     if (!item)
       throw new NotFound(`No record found for ${this.options.id} '${id}'`)
@@ -1357,8 +1365,8 @@ export class KyselyAdapter<
     const { id: idField, name, dialectType } = options
 
     const response = await (isArray && dialectType !== 'mysql'
-      ? q.execute().catch(errorHandler)
-      : q.executeTakeFirst().catch(errorHandler))
+      ? q.execute().catch(this.handleError)
+      : q.executeTakeFirst().catch(this.handleError))
 
     if (dialectType !== 'mysql') {
       return response
@@ -1375,8 +1383,8 @@ export class KyselyAdapter<
     if (context.buildWhere) {
       const query = context.buildWhere(selected)
       return isArray
-        ? query.execute().catch(errorHandler)
-        : query.executeTakeFirst().catch(errorHandler)
+        ? query.execute().catch(this.handleError)
+        : query.executeTakeFirst().catch(this.handleError)
     }
 
     // Standard insert logic: figure out which rows to re-fetch. MySQL has no
@@ -1429,8 +1437,8 @@ export class KyselyAdapter<
         : selected.where(this.col(idField), 'in', ids)
 
     return isArray
-      ? where.execute().catch(errorHandler)
-      : where.executeTakeFirst().catch(errorHandler)
+      ? where.execute().catch(this.handleError)
+      : where.executeTakeFirst().catch(this.handleError)
   }
 
   /**
@@ -1795,7 +1803,7 @@ export class KyselyAdapter<
               true,
             )
               .execute()
-              .catch(errorHandler)) as Result[]
+              .catch(this.handleError)) as Result[]
 
             // Re-order to follow the input order and drop any not found.
             const missingRecords = missingItems
@@ -1823,7 +1831,9 @@ export class KyselyAdapter<
               ) as any
             }
 
-            const existing = await query.executeTakeFirst().catch(errorHandler)
+            const existing = await query
+              .executeTakeFirst()
+              .catch(this.handleError)
             return existing as Result
           }
         }
@@ -2061,7 +2071,7 @@ export class KyselyAdapter<
       return isMulti ? [] : Promise.reject(new NotFound())
     }
 
-    const _result = await q.execute().catch(errorHandler)
+    const _result = await q.execute().catch(this.handleError)
 
     const result = maybeItems || _result
 

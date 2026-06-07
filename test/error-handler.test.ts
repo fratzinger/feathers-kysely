@@ -1,4 +1,5 @@
 import assert from 'node:assert'
+import { BadRequest } from '@feathersjs/errors'
 import { errorHandler, ERROR } from '../src/index.js'
 
 describe('Kysely Error handler', () => {
@@ -44,12 +45,40 @@ describe('Kysely Error handler', () => {
       () =>
         errorHandler({
           code: '22P02',
-          message: 'Key (id)=(1) is not present in table "users".',
+          message: 'invalid input syntax for type integer: "abc"',
           severity: 'ERROR',
           routine: 'ExecConstraints',
         }),
       {
+        // class 22 (data exception) → NotFound: a malformed id reads as a
+        // missing resource, matching the Feathers adapter convention.
         name: 'NotFound',
+      },
+    )
+    assert.throws(
+      () =>
+        errorHandler({
+          code: '23505',
+          message:
+            'duplicate key value violates unique constraint "users_email_key"',
+          severity: 'ERROR',
+          routine: 'ExecConstraints',
+        }),
+      {
+        name: 'Conflict',
+      },
+    )
+    assert.throws(
+      () =>
+        errorHandler({
+          code: '23P01',
+          message:
+            'conflicting key value violates exclusion constraint "room_reservation_excl"',
+          severity: 'ERROR',
+          routine: 'ExecConstraints',
+        }),
+      {
+        name: 'Conflict',
       },
     )
     assert.throws(
@@ -89,28 +118,83 @@ describe('Kysely Error handler', () => {
     )
   })
 
-  it('omits query information from the postgres client message but keeps the raw error', () => {
-    const raw = {
-      code: '23505',
+  describe('postgres message sanitization', () => {
+    const notNull = {
+      code: '23502',
       message:
-        'Failing query: INSERT INTO users (email) VALUES ($1) - duplicate key value violates unique constraint',
+        'null value in column "name" of relation "items" violates not-null constraint',
       severity: 'ERROR',
-      routine: 'exec_stmt',
+      routine: 'ExecConstraints',
     }
 
-    try {
-      errorHandler(raw)
-      assert.fail('errorHandler should have thrown')
-    } catch (err: any) {
-      assert.strictEqual(err.name, 'BadRequest')
-      // The query fragment before the dash must not reach the client message.
-      assert.strictEqual(
-        err.message,
-        'duplicate key value violates unique constraint',
+    it('keeps declared column names but strips table/relation names', () => {
+      assert.throws(
+        () => errorHandler(notNull, new Set(['name'])),
+        (err: any) => {
+          assert.strictEqual(err.name, 'BadRequest')
+          // The declared column survives (useful, and already public)...
+          assert.match(err.message, /not-null constraint/)
+          assert.ok(err.message.includes('"name"'))
+          // ...but the relation/table name does not, and the message is not
+          // the mangled `null constraint` the old split('-') produced.
+          assert.ok(!err.message.includes('items'))
+          assert.notStrictEqual(err.message, 'null constraint')
+          // The raw, un-sanitized error is preserved for server-side logging.
+          assert.strictEqual(err[ERROR], notNull)
+          return true
+        },
       )
-      assert.ok(!err.message.includes('INSERT INTO users'))
-      // The original, un-stripped error is preserved for server-side logging.
-      assert.strictEqual(err[ERROR], raw)
-    }
+    })
+
+    it('strips constraint names from unique violations (Conflict)', () => {
+      assert.throws(
+        () =>
+          errorHandler(
+            {
+              code: '23505',
+              message:
+                'duplicate key value violates unique constraint "items_email_key"',
+              severity: 'ERROR',
+              routine: 'ExecConstraints',
+            },
+            new Set(['name']),
+          ),
+        (err: any) => {
+          assert.strictEqual(err.name, 'Conflict')
+          assert.match(err.message, /unique constraint/)
+          assert.ok(!err.message.includes('"'))
+          return true
+        },
+      )
+    })
+
+    it('strips every identifier when no known columns are provided', () => {
+      assert.throws(
+        () => errorHandler(notNull),
+        (err: any) => {
+          assert.strictEqual(err.name, 'BadRequest')
+          assert.match(err.message, /not-null constraint/)
+          assert.ok(!err.message.includes('"'))
+          assert.ok(!err.message.includes('name'))
+          assert.ok(!err.message.includes('items'))
+          return true
+        },
+      )
+    })
+  })
+
+  describe('non-database and Feathers errors', () => {
+    it('passes an existing FeathersError through unchanged', () => {
+      assert.throws(() => errorHandler(new BadRequest('nope')), {
+        name: 'BadRequest',
+        message: 'nope',
+      })
+    })
+
+    it('wraps an unknown (non-database) error as GeneralError', () => {
+      assert.throws(() => errorHandler(new Error('boom')), {
+        name: 'GeneralError',
+      })
+    })
   })
 })
