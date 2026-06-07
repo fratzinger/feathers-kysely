@@ -1,5 +1,6 @@
 import {
   BadRequest,
+  Conflict,
   FeathersError,
   Forbidden,
   GeneralError,
@@ -10,15 +11,44 @@ import {
 
 export const ERROR = Symbol.for('feathers-kysely/error')
 
+const PG_IDENTIFIER = /"([^"]*)"/g
+
+/**
+ * Sanitize a Postgres error message for API clients. Postgres wraps every
+ * object name (table, column, constraint) in double quotes, so quoted spans
+ * are the only place schema internals leak into `message`. We keep an
+ * identifier when it is a declared column (already public, and useful — it
+ * tells the client which field failed) and strip the rest (table names,
+ * constraint names, literal values). With no `knownColumns` every identifier
+ * is stripped. The raw, un-sanitized error is preserved on
+ * `feathersError[ERROR]` for server-side logging.
+ */
+function sanitizePgMessage(
+  message: string,
+  knownColumns?: { has(name: string): boolean },
+): string {
+  return message
+    .replace(PG_IDENTIFIER, (match, identifier) =>
+      knownColumns?.has(identifier) ? match : '',
+    )
+    .replace(/\s+/g, ' ')
+    .replace(/[\s:;,]+$/g, '')
+    .trim()
+}
+
 /**
  * Convert a database error into a Feathers error.
+ *
+ * `knownColumns` is the set of public column names (the service's
+ * `properties`); identifiers matching it are kept in the client-facing
+ * Postgres message, everything else is stripped. The raw error is always
+ * preserved on `feathersError[ERROR]` for server-side logging.
  */
-export function errorHandler(error: any): never {
-  // `message` is the text surfaced to API clients. It is mutable because the
-  // Postgres branch below strips the query fragment from it before it is used
-  // to construct the Feathers error (the raw error is still preserved on
-  // `feathersError[ERROR]` for server-side logging).
-  let { message } = error
+export function errorHandler(
+  error: any,
+  knownColumns?: { has(name: string): boolean },
+): never {
+  const { message } = error
   let feathersError = error
 
   if (error.sqlState && error.sqlState.length) {
@@ -82,31 +112,39 @@ export function errorHandler(error: any): never {
     error.routine
   ) {
     // NOTE: Error codes taken from
-    // https://www.postgresql.org/docs/9.6/static/errcodes-appendix.html
-    // Omit query information from the client-facing message (the raw message
-    // remains available on feathersError[ERROR]).
-    const messages = (error.message || '').split('-')
+    // https://www.postgresql.org/docs/current/errcodes-appendix.html
+    const safe =
+      typeof message === 'string'
+        ? sanitizePgMessage(message, knownColumns)
+        : message
 
-    message = messages[messages.length - 1].trim()
-
-    switch (error.code.slice(0, 2)) {
-      case '22':
-        feathersError = new NotFound(message)
-        break
-      case '23':
-        feathersError = new BadRequest(message)
-        break
-      case '28':
-        feathersError = new Forbidden(message)
-        break
-      case '3D':
-      case '3F':
-      case '42':
-        feathersError = new Unprocessable(message)
-        break
-      default:
-        feathersError = new GeneralError(message)
-        break
+    if (error.code === '23505' || error.code === '23P01') {
+      // unique_violation / exclusion_violation
+      feathersError = new Conflict(safe)
+    } else {
+      switch (error.code.slice(0, 2)) {
+        case '22':
+          // Data exception — most commonly an invalid id format on a lookup
+          // (e.g. GET /service/<non-integer>). Feathers adapters map this to
+          // NotFound so a malformed id reads as a missing resource (404); the
+          // adapter conformance suite relies on this.
+          feathersError = new NotFound(safe)
+          break
+        case '23': // integrity constraint: not_null, check, foreign_key
+          feathersError = new BadRequest(safe)
+          break
+        case '28':
+          feathersError = new Forbidden(safe)
+          break
+        case '3D':
+        case '3F':
+        case '42':
+          feathersError = new Unprocessable(safe)
+          break
+        default:
+          feathersError = new GeneralError(safe)
+          break
+      }
     }
   } else if (!(error instanceof FeathersError)) {
     feathersError = new GeneralError(message)
