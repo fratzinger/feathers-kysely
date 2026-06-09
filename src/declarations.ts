@@ -84,17 +84,24 @@ export interface KyselyAdapterTransaction {
   deferredEvents?: Array<() => void>
 }
 
-export interface UpsertOptions<T = any> {
+/**
+ * Kysely-specific options passed through `params.kysely`. Currently exposes
+ * `ON CONFLICT` / `ON DUPLICATE KEY UPDATE` handling for `create`, turning a
+ * `create` call into an upsert while keeping the standard Feathers pipeline
+ * (events, hooks, transaction event deferral).
+ */
+export interface KyselyParams<T = any> {
   /**
-   * Fields to use in the ON CONFLICT clause
+   * Fields to use in the `ON CONFLICT` clause. When set, `create` performs an
+   * upsert instead of a plain insert.
    */
-  onConflictFields: (keyof T)[]
+  onConflictFields?: (keyof T)[]
   /**
    * Action to take on conflict: 'ignore' or 'merge'
    * - 'ignore': Do nothing on conflict (ON CONFLICT DO NOTHING)
    * - 'merge': Update the row on conflict (ON CONFLICT DO UPDATE)
    *
-   * @default 'merge'
+   * @default 'ignore'
    */
   onConflictAction?: 'ignore' | 'merge'
   /**
@@ -109,9 +116,26 @@ export interface UpsertOptions<T = any> {
   onConflictExcludeFields?: (keyof T)[]
 }
 
+/**
+ * @deprecated Use `create(data, { kysely: { onConflictFields, ... } })` instead.
+ * `create` runs through the standard Feathers pipeline (emits `created`, runs
+ * hooks, participates in transaction event deferral); the `upsert` method does
+ * not. See {@link KyselyParams}.
+ */
+export interface UpsertOptions<T = any> extends Omit<KyselyParams<T>, 'onConflictFields'> {
+  /**
+   * Fields to use in the ON CONFLICT clause
+   */
+  onConflictFields: (keyof T)[]
+}
+
 export interface KyselyAdapterParams<Q extends AdapterQuery = AdapterQuery>
   extends AdapterParams<Q, Partial<KyselyAdapterOptions>> {
   transaction?: KyselyAdapterTransaction
+  /**
+   * Kysely-specific options. See {@link KyselyParams}.
+   */
+  kysely?: KyselyParams
 }
 
 export type SortDirection =

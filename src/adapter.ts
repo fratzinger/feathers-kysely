@@ -24,6 +24,7 @@ import type {
   DialectType,
   KyselyAdapterOptions,
   KyselyAdapterParams,
+  KyselyParams,
   Relation,
   UpsertOptions,
 } from './declarations.js'
@@ -1646,7 +1647,7 @@ export class KyselyAdapter<
     params: ServiceParams = {} as ServiceParams,
   ): Promise<Result | Result[]> {
     const { filters, options } = this.filterQuery(params)
-    const { name, id: idField } = options
+    const { name, id: idField, dialectType } = options
     const isArray = Array.isArray(_data)
 
     if (isArray && _data.length === 0) {
@@ -1655,56 +1656,18 @@ export class KyselyAdapter<
 
     const $select = applySelectId(filters.$select, idField)
 
-    const q = this.db(params)
-      .insertInto(name)
-      .values(this.convertValues(_data) as any)
-
-    const returning = this.applyReturning(q, $select)
-
-    const response = await this.executeAndReturn(returning, {
-      isArray,
-      options,
-      params,
-      $select,
-      data: _data,
-    })
-
-    return response
-  }
-
-  async _upsert(
-    data: Data,
-    params: ServiceParams & UpsertOptions<Result>,
-  ): Promise<Result>
-  async _upsert(
-    data: Data[],
-    params: ServiceParams & UpsertOptions<Result>,
-  ): Promise<Result[]>
-  async _upsert(
-    data: Data | Data[],
-    _params: ServiceParams & UpsertOptions<Result>,
-  ): Promise<Result | Result[]>
-  async _upsert(
-    _data: Data | Data[],
-    params: ServiceParams & UpsertOptions<Result>,
-  ): Promise<Result | Result[]> {
-    const { filters, options } = this.filterQuery(params)
-    const { name, id: idField, dialectType } = options
-    const isArray = Array.isArray(_data)
-    const $select = applySelectId(filters.$select, idField)
-
     const {
       onConflictFields = [],
       onConflictAction = 'ignore',
       onConflictMergeFields,
       onConflictExcludeFields = [],
-    } = params
+    } = (params as { kysely?: KyselyParams<Result> }).kysely ?? {}
 
     let q = this.db(params)
       .insertInto(name)
       .values(this.convertValues(_data) as any)
 
-    // Apply conflict resolution based on database dialect
+    // Apply conflict resolution based on database dialect (upsert via create)
     if (onConflictFields.length > 0) {
       const upsertOptions = {
         onConflictAction,
@@ -1841,6 +1804,52 @@ export class KyselyAdapter<
     }
 
     return response
+  }
+
+  /**
+   * @deprecated Use `create(data, { kysely: { onConflictFields, ... } })`
+   * instead. `create` runs through the standard Feathers pipeline (emits
+   * `created`, runs hooks, participates in transaction event deferral); this
+   * method does not. The conflict-resolution logic now lives in `_create`; this
+   * method simply forwards its options through `params.kysely`.
+   */
+  async _upsert(
+    data: Data,
+    params: ServiceParams & UpsertOptions<Result>,
+  ): Promise<Result>
+  async _upsert(
+    data: Data[],
+    params: ServiceParams & UpsertOptions<Result>,
+  ): Promise<Result[]>
+  async _upsert(
+    data: Data | Data[],
+    _params: ServiceParams & UpsertOptions<Result>,
+  ): Promise<Result | Result[]>
+  async _upsert(
+    _data: Data | Data[],
+    params: ServiceParams & UpsertOptions<Result>,
+  ): Promise<Result | Result[]> {
+    const {
+      onConflictFields,
+      onConflictAction,
+      onConflictMergeFields,
+      onConflictExcludeFields,
+      ...rest
+    } = params
+
+    return this._create(
+      _data as any,
+      {
+        ...rest,
+        kysely: {
+          onConflictFields,
+          onConflictAction,
+          onConflictMergeFields,
+          onConflictExcludeFields,
+          ...rest?.kysely,
+        },
+      } as unknown as ServiceParams,
+    )
   }
 
   private async getWhereForUpdateOrDelete<

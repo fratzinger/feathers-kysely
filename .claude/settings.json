@@ -11,7 +11,8 @@
       "Bash(pnpm view *)",
       "Bash(DB=sqlite pnpm vitest run)",
       "Bash(pnpm exec *)",
-      "Bash(echo \"=== tsc exit: $? ===\")"
+      "Bash(echo \"=== tsc exit: $? ===\")",
+      "Bash(pnpm typecheck *)"
     ]
   }
 }
