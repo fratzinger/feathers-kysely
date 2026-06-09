@@ -54,6 +54,12 @@ export class KyselyService<
     return this._create(data, params)
   }
 
+  /**
+   * @deprecated Use `create(data, { kysely: { onConflictFields, ... } })`
+   * instead. Unlike `upsert`, `create` runs through the standard Feathers
+   * pipeline — it emits the `created` event, runs hooks, and participates in
+   * transaction event deferral.
+   */
   async upsert(
     data: Data,
     params: ServiceParams & UpsertOptions<Result>,
