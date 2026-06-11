@@ -1375,13 +1375,6 @@ export class KyselyAdapter<
       buildWhere?: (
         query: SelectQueryBuilder<any, any, any>,
       ) => SelectQueryBuilder<any, any, any>
-      /**
-       * MySQL only: when the statement affected zero rows (an ignored
-       * ON DUPLICATE KEY conflict — the dummy `id = id` update reports 0
-       * affected rows — or a merge writing identical values), skip the
-       * re-fetch and resolve to `undefined`.
-       */
-      undefinedWhenUnaffected?: boolean
     },
   ) {
     const { isArray, options, $select, params } = context
@@ -1396,13 +1389,6 @@ export class KyselyAdapter<
     }
 
     // mysql only
-
-    if (context.undefinedWhenUnaffected) {
-      const affected = Number((response as any)?.numInsertedOrUpdatedRows ?? 0)
-      if (affected === 0) {
-        return undefined
-      }
-    }
 
     const selected = this.selectFromTable(params, name, $select)
 
@@ -1772,13 +1758,14 @@ export class KyselyAdapter<
 
     // MySQL has no RETURNING: to return only written rows we have to know
     // beforehand which conflict keys already exist (the rows the INSERT is
-    // going to ignore).
+    // going to ignore or merge). NOTE: `affectedRows` alone cannot detect an
+    // ignored conflict — with the CLIENT_FOUND_ROWS flag (mysql2's default) a
+    // no-op ON DUPLICATE KEY UPDATE reports 1, exactly like a fresh insert.
     let freshItems: Data[] | undefined
     if (
       dialectType === 'mysql' &&
       returningMode !== 'all' &&
-      effectivelyIgnored &&
-      isArray
+      (effectivelyIgnored || (returningMode === 'changed' && !isArray))
     ) {
       const existingKeyRows = (await this.buildWhereForConflictFields(
         this.db(params)
@@ -1786,7 +1773,7 @@ export class KyselyAdapter<
           .select(this.col(onConflictFields as string[]) as string[]),
         _data,
         onConflictFields,
-        true,
+        isArray,
       )
         .execute()
         .catch(this.handleError)) as any[]
@@ -1794,14 +1781,44 @@ export class KyselyAdapter<
       const keyOf = (row: any) =>
         JSON.stringify(onConflictFields.map((field) => row[field]))
       const existingKeys = new Set(existingKeyRows.map(keyOf))
-      freshItems = (_data as Data[]).filter(
-        (item) => !existingKeys.has(keyOf(item)),
-      )
 
-      if (freshItems.length === 0) {
-        // Every row conflicts — run the (no-op) INSERT, skip the re-fetch.
-        await returning.execute().catch(this.handleError)
-        return []
+      if (isArray) {
+        freshItems = (_data as Data[]).filter(
+          (item) => !existingKeys.has(keyOf(item)),
+        )
+
+        if (freshItems.length === 0) {
+          // Every row conflicts — run the (no-op) INSERT, skip the re-fetch.
+          await returning.execute().catch(this.handleError)
+          return []
+        }
+      } else if (existingKeys.has(keyOf(_data))) {
+        // Single create on a pre-existing row.
+        const insertResult = await returning
+          .executeTakeFirst()
+          .catch(this.handleError)
+
+        if (effectivelyIgnored) {
+          return undefined as unknown as Result
+        }
+
+        // merge + 'changed': MySQL reports 2 affected rows for a real update
+        // (a no-op reports 1 with CLIENT_FOUND_ROWS, 0 without).
+        const affected = Number(
+          (insertResult as any)?.numInsertedOrUpdatedRows ?? 0,
+        )
+        if (affected !== 2) {
+          return undefined as unknown as Result
+        }
+
+        return (await this.buildWhereForConflictFields(
+          this.selectFromTable(params, name, $select),
+          _data,
+          onConflictFields,
+          false,
+        )
+          .executeTakeFirst()
+          .catch(this.handleError)) as Result
       }
     }
 
@@ -1816,16 +1833,11 @@ export class KyselyAdapter<
           ? (selected) =>
               this.buildWhereForConflictFields(
                 selected,
-                freshItems ?? _data,
+                isArray ? (freshItems ?? _data) : _data,
                 onConflictFields,
                 isArray,
               )
           : undefined,
-      undefinedWhenUnaffected:
-        dialectType === 'mysql' &&
-        !isArray &&
-        (returningMode === 'changed' ||
-          (returningMode === 'written' && effectivelyIgnored)),
     })
 
     if (effectivelyIgnored && hasConflictHandling && returningMode === 'all') {

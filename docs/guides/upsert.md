@@ -133,12 +133,13 @@ bump, no dead tuples. MySQL natively skips identical writes with
 - **TypeScript**: the service types still declare `Promise<Result>`. With
   `'written'`, `'changed'` or `'none'`, a single create may resolve to
   `undefined` at runtime.
-- **MySQL multi creates**: MySQL has no `RETURNING`. For `'written'` with
-  ignored conflicts the adapter runs one extra `SELECT` over the conflict
-  fields _before_ the insert to identify pre-existing rows — outside a
-  transaction this is best-effort under concurrent writers. For a multi-row
-  `merge` with `'changed'`, the returned rows behave like `'all'` (there is no
-  way to tell changed rows apart).
+- **MySQL**: MySQL has no `RETURNING`. To tell written rows apart, the
+  adapter runs one extra `SELECT` over the conflict fields _before_ the
+  insert (for `'written'`/`'changed'` with ignored conflicts and for
+  single-row `'changed'` merges) — outside a transaction this is best-effort
+  under concurrent writers. For a multi-row `merge` with `'changed'`, the
+  returned rows behave like `'all'` (there is no way to tell changed rows
+  apart).
 :::
 
 ## Deprecated: `upsert` method
