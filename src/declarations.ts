@@ -114,6 +114,33 @@ export interface KyselyParams<T = any> {
    * Takes precedence over onConflictMergeFields
    */
   onConflictExcludeFields?: (keyof T)[]
+  /**
+   * Controls what `create` returns when conflict handling is active. Ignored
+   * unless `onConflictFields` is set.
+   *
+   * - `'all'` (default): get-or-create semantics — rows whose conflict was
+   *   ignored are post-fetched, so every input row is returned.
+   * - `'written'`: only rows actually written by the statement. With
+   *   `'ignore'` that means inserted rows only — a single create whose
+   *   conflict was ignored resolves to `undefined`, a multi create returns a
+   *   shorter array. With `'merge'` (and at least one field to update) every
+   *   row is written, so this equals `'all'`.
+   * - `'changed'`: like `'written'`, but a merge only writes (and returns)
+   *   rows whose merge fields actually differ. On PostgreSQL/SQLite this adds
+   *   `DO UPDATE ... WHERE ... IS DISTINCT FROM ...`, so no-op merges are not
+   *   written at all (no triggers, no `updated_at` bump). MySQL natively
+   *   skips identical writes; for multi creates on MySQL the returned rows
+   *   behave like `'all'` (no RETURNING support to tell them apart).
+   * - `'none'`: return nothing — `undefined` for single, `[]` for multi.
+   *   Skips RETURNING and all post-fetching (fastest bulk path).
+   *
+   * Note: the service types still declare `Promise<Result>`; with
+   * `'written'`/`'changed'`/`'none'` a single create may resolve to
+   * `undefined` and the `created` event may be emitted with `undefined`.
+   *
+   * @default 'all'
+   */
+  onConflictReturning?: 'all' | 'written' | 'changed' | 'none'
 }
 
 /**
@@ -122,15 +149,19 @@ export interface KyselyParams<T = any> {
  * hooks, participates in transaction event deferral); the `upsert` method does
  * not. See {@link KyselyParams}.
  */
-export interface UpsertOptions<T = any> extends Omit<KyselyParams<T>, 'onConflictFields'> {
+export interface UpsertOptions<T = any> extends Omit<
+  KyselyParams<T>,
+  'onConflictFields'
+> {
   /**
    * Fields to use in the ON CONFLICT clause
    */
   onConflictFields: (keyof T)[]
 }
 
-export interface KyselyAdapterParams<Q extends AdapterQuery = AdapterQuery>
-  extends AdapterParams<Q, Partial<KyselyAdapterOptions>> {
+export interface KyselyAdapterParams<
+  Q extends AdapterQuery = AdapterQuery,
+> extends AdapterParams<Q, Partial<KyselyAdapterOptions>> {
   transaction?: KyselyAdapterTransaction
   /**
    * Kysely-specific options. See {@link KyselyParams}.
