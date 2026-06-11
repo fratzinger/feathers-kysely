@@ -2,7 +2,7 @@ import type { Generated, RawBuilder } from 'kysely'
 import { Kysely, sql } from 'kysely'
 import { feathers } from '@feathersjs/feathers'
 import dialect, { getDialect } from './dialect.js'
-import { alterItems } from 'feathers-hooks-common'
+import { transformData } from 'feathers-utils'
 
 import { KyselyService } from '../src/index.js'
 import { describe } from 'vitest'
@@ -68,7 +68,7 @@ function setup() {
   containsTest.hooks({
     before: {
       create: [
-        alterItems((item) => {
+        transformData((item: Record<string, any>) => {
           if (item.jsonArr) {
             item.jsonArr = json(item.jsonArr)
           }
