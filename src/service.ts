@@ -12,11 +12,11 @@ import type { KyselyAdapterParams, UpsertOptions } from './declarations.js'
 import type { PaginatedOrArray } from 'feathers-utils'
 
 export class KyselyService<
-    Result extends Record<string, any> = Record<string, any>,
-    Data = Partial<Result>,
-    ServiceParams extends Params<any> = KyselyAdapterParams,
-    PatchData = Partial<Data>,
-  >
+  Result extends Record<string, any> = Record<string, any>,
+  Data = Partial<Result>,
+  ServiceParams extends Params<any> = KyselyAdapterParams,
+  PatchData = Partial<Data>,
+>
   extends KyselyAdapter<Result, Data, ServiceParams, PatchData>
   implements
     ServiceMethods<Result | Paginated<Result>, Data, ServiceParams, PatchData>

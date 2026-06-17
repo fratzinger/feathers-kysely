@@ -31,7 +31,6 @@ import type {
 import { expressionBuilder, sql } from 'kysely'
 import type {
   SelectExpression,
-  ComparisonOperatorExpression,
   DeleteQueryBuilder,
   InsertQueryBuilder,
   Kysely,
@@ -42,52 +41,20 @@ import type {
 } from 'kysely'
 import {
   applySelectId,
+  buildJsonbContainment,
   coerceTemporalQueryProperty,
   convertBooleansToNumbers,
+  getDatabaseDialect,
+  getOperator,
   getOrderByModifier,
   getSortDirection,
+  OPERATORS,
+  POSTGRES_ONLY_OPERATORS,
   temporalKind,
+  transformOperatorValue,
   traverseJSON,
-} from './utils.js'
+} from './utils/index.js'
 import { addToQuery } from 'feathers-utils'
-
-// See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
-const OPERATORS: Record<string, ComparisonOperatorExpression> = {
-  $lt: '<',
-  $lte: '<=',
-  $gt: '>',
-  $gte: '>=',
-  $in: 'in',
-  $nin: 'not in',
-  $eq: '=',
-  $ne: '!=',
-  $like: 'like',
-  $notLike: 'not like',
-  $iLike: 'ilike',
-  $contains: '@>',
-  $contained: '<@',
-  $overlap: '&&',
-}
-
-// Operators that only exist in Postgres. They are not registered (and therefore
-// rejected by Feathers with a BadRequest) on other dialects. NOTE: $iLike is
-// intentionally NOT here — it is translated to a case-insensitive LIKE instead.
-const POSTGRES_ONLY_OPERATORS = ['$contains', '$contained', '$overlap']
-
-function getDatabaseDialect(db: Kysely<any>): DialectType {
-  const adapterName = db.getExecutor().adapter.constructor.name.toLowerCase()
-
-  if (adapterName.includes('sqlite')) return 'sqlite'
-  if (adapterName.includes('postgres')) return 'postgres'
-  if (adapterName.includes('mysql')) return 'mysql'
-  if (adapterName.includes('mssql') || adapterName.includes('sqlserver')) {
-    throw new Error(
-      'MSSQL is not supported by feathers-kysely. Supported dialects: postgres, mysql, sqlite.',
-    )
-  }
-
-  return 'sqlite'
-}
 
 // TODO: $between, $notBetween
 
@@ -96,8 +63,7 @@ function getDatabaseDialect(db: Kysely<any>): DialectType {
 // from every row before the result is returned.
 const PAGINATION_TOTAL_KEY = '__fk_total'
 
-const FILTERS = ['$select', '$sort', '$limit', '$skip'] as const
-type Filter = (typeof FILTERS)[number]
+const FILTERS = new Set<string>(['$select', '$sort', '$limit', '$skip'])
 
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
@@ -416,7 +382,7 @@ export class KyselyAdapter<
     for (const key in query) {
       const value = query[key]
 
-      if (FILTERS.includes(key as Filter)) {
+      if (FILTERS.has(key)) {
         out[key] = value
         continue
       }
@@ -559,7 +525,7 @@ export class KyselyAdapter<
     if (!this.options.relations) return { q, query }
 
     for (const key in query) {
-      if (FILTERS.includes(key as Filter)) continue
+      if (FILTERS.has(key)) continue
 
       if ((key === '$and' || key === '$or') && Array.isArray(query[key])) {
         let array = query[key]
@@ -909,14 +875,16 @@ export class KyselyAdapter<
             operator === '$contained' ||
             operator === '$overlap')
         ) {
-          qs.push(this.buildJsonbContainment(eb, column, operator, value))
+          qs.push(buildJsonbContainment(eb, column, operator, value))
           continue
         }
 
-        const op = this.getOperator(operator, value)
+        const op = getOperator(operator, value, this.options.dialectType)
         if (!op) continue
 
-        qs.push(eb(column, op, this.transformOperatorValue(operator, value)))
+        qs.push(
+          eb(column, op, transformOperatorValue(operator, value, propertyType)),
+        )
       }
 
       if (qs.length) {
@@ -926,7 +894,7 @@ export class KyselyAdapter<
       // no operators matched - fall through to simple equality check
     }
 
-    const op = this.getOperator('$eq', queryProperty)
+    const op = getOperator('$eq', queryProperty, this.options.dialectType)
     if (!op) return
     return eb(column, op, queryProperty)
   }
@@ -1005,97 +973,6 @@ export class KyselyAdapter<
     return q
   }
 
-  private getOperator(op: string, value: any) {
-    if (value === null) {
-      if (op === '$ne') return 'is not'
-      if (op === '$eq') return 'is'
-      return OPERATORS[op]
-    }
-
-    // No dialect except Postgres has an ILIKE keyword. MySQL's default collation
-    // is case-insensitive and SQLite's LIKE is case-insensitive for ASCII, so
-    // plain LIKE gives equivalent behavior for typical input (case folding of
-    // non-ASCII on SQLite/MySQL depends on the column collation).
-    if (op === '$iLike' && this.options.dialectType !== 'postgres') {
-      return 'like'
-    }
-
-    return OPERATORS[op]
-  }
-
-  private transformOperatorValue(op: string, value: any) {
-    if (op !== '$contains' && op !== '$contained' && op !== '$overlap') {
-      return value
-    }
-
-    if (!value) {
-      return value
-    }
-
-    if (!Array.isArray(value)) {
-      throw new BadRequest(`The value for '${op}' must be an array`)
-    }
-
-    // These are the Postgres array operators (@>, <@, &&). Build a properly
-    // typed array literal with every element bound as a parameter, casting
-    // based on the first element's type so Postgres can infer the array type.
-    const firstElement = value[0]
-    if (typeof firstElement === 'number') {
-      return sql`ARRAY[${sql.join(value)}]::integer[]`
-    } else if (typeof firstElement === 'string') {
-      return sql`ARRAY[${sql.join(value)}]::text[]`
-    } else {
-      // Default case - let PostgreSQL try to infer
-      return sql`ARRAY[${sql.join(value)}]`
-    }
-  }
-
-  /**
-   * Build the Postgres containment/overlap expression for a `jsonb`/`json`
-   * column. Unlike the native-array codegen in `transformOperatorValue`, the
-   * operands here are themselves `jsonb` so the comparison is `jsonb`-vs-`jsonb`:
-   *
-   *   $contains  ->  column @> '[...]'::jsonb   (column contains all listed elements)
-   *   $contained ->  column <@ '[...]'::jsonb   (column is contained by the list)
-   *   $overlap   ->  (column @> '[a]'::jsonb OR column @> '[b]'::jsonb ...)
-   *
-   * `$overlap` has no native `jsonb &&` operator, so we express "any listed
-   * element present" as an OR of single-element containment checks. This works
-   * for both string and numeric jsonb arrays (avoiding the string-only `?|`
-   * key-existence operator). The JSON payload is always bound as a parameter.
-   */
-  private buildJsonbContainment(
-    eb: ExpressionBuilder<any, any>,
-    column: any,
-    operator: '$contains' | '$contained' | '$overlap',
-    value: any,
-  ) {
-    if (!Array.isArray(value)) {
-      throw new BadRequest(`The value for '${operator}' must be an array`)
-    }
-
-    const ref = sql.ref(column)
-
-    if (operator === '$contains') {
-      return sql<boolean>`${ref} @> ${JSON.stringify(value)}::jsonb`
-    }
-
-    if (operator === '$contained') {
-      return sql<boolean>`${ref} <@ ${JSON.stringify(value)}::jsonb`
-    }
-
-    // $overlap: any listed element present. An empty list overlaps nothing.
-    if (value.length === 0) {
-      return sql<boolean>`1 = 0`
-    }
-
-    return eb.or(
-      value.map(
-        (element) => sql<boolean>`${ref} @> ${JSON.stringify([element])}::jsonb`,
-      ),
-    )
-  }
-
   private col<T>(
     column: T,
     options?: { tableName: string | null | undefined },
@@ -1137,7 +1014,7 @@ export class KyselyAdapter<
     options?: HandleQueryOptions,
   ) {
     // ignore filters - just for safety
-    if (FILTERS.includes(queryKey as Filter)) {
+    if (FILTERS.has(queryKey)) {
       return undefined
     }
 

@@ -13,6 +13,12 @@ interface DB {
     str: string
     intArr: number[]
     strArr: string[]
+    bigintArr: string[]
+    floatArr: number[]
+    numericArr: string[]
+    charArr: string[]
+    varcharArr: string[]
+    dateArr: string[]
     jsonArr: any[]
   }
 }
@@ -22,6 +28,12 @@ type ContainsTest = {
   str: string
   intArr: number[]
   strArr: string[]
+  bigintArr: (number | string)[]
+  floatArr: number[]
+  numericArr: (number | string)[]
+  charArr: string[]
+  varcharArr: string[]
+  dateArr: string[]
   jsonArr: any[]
 }
 
@@ -47,6 +59,12 @@ function setup() {
       .addColumn('str', 'varchar')
       .addColumn('intArr', sql`integer[]`)
       .addColumn('strArr', sql`text[]`)
+      .addColumn('bigintArr', sql`bigint[]`)
+      .addColumn('floatArr', sql`float8[]`)
+      .addColumn('numericArr', sql`numeric[]`)
+      .addColumn('charArr', sql`char(4)[]`)
+      .addColumn('varcharArr', sql`varchar[]`)
+      .addColumn('dateArr', sql`date[]`)
       .addColumn('jsonArr', 'jsonb')
       .execute()
   }
@@ -65,6 +83,17 @@ function setup() {
         // jsonb operands instead of the native-array codegen used for
         // genuine integer[]/varchar[] columns.
         jsonArr: { type: 'array', 'x-db-type': 'jsonb' },
+        // For non-text[]/integer[] array columns the declared array type drives
+        // the cast of the literal so it matches the column's element type.
+        bigintArr: { type: 'array', 'x-db-type': 'bigint[]' },
+        floatArr: { type: 'array', 'x-db-type': 'float8[]' },
+        numericArr: { type: 'array', 'x-db-type': 'numeric[]' },
+        charArr: { type: 'array', 'x-db-type': 'char(4)[]' },
+        varcharArr: { type: 'array', 'x-db-type': 'varchar[]' },
+        // `date[]` does not trigger temporal coercion (temporalKind matches only
+        // an exact "date"), and array-operator values are excluded from temporal
+        // coercion anyway, so the date strings are cast straight to ::date[].
+        dateArr: { type: 'array', 'x-db-type': 'date[]' },
       },
     }),
   )
@@ -264,6 +293,73 @@ describe.skipIf(dialectName !== 'postgres')('special operators', () => {
     })
 
     expect(findResult4.length).toBe(2)
+  })
+
+  // The native ::text[]/::integer[] codegen only matches genuine text[]/integer[]
+  // columns. Other element types (bigint[], float8[], numeric[], char(n)[],
+  // varchar[]) require both operands to share the exact array type, which is
+  // driven by the column's `x-db-type` annotation.
+  it('array operators honor the declared array type (varchar/bigint/float/numeric/char)', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        varcharArr: ['a', 'b', 'c'],
+        bigintArr: [1, 2, 3],
+        floatArr: [1.5, 2.5, 3.5],
+        numericArr: [1, 2, 3],
+        charArr: ['aaaa', 'bbbb', 'cccc'],
+        dateArr: ['2026-06-17', '2026-06-18'],
+      },
+      {
+        varcharArr: ['c', 'd', 'e'],
+        bigintArr: [3, 4, 5],
+        floatArr: [3.5, 4.5, 5.5],
+        numericArr: [3, 4, 5],
+        charArr: ['cccc', 'dddd', 'eeee'],
+        dateArr: ['2026-06-19', '2026-06-20'],
+      },
+    ])
+
+    // varchar[] - was the originally reported `varchar[] @> text[]` failure
+    const vc = await app.service('contains-test').find({
+      query: { varcharArr: { $contains: ['a', 'b'] } },
+      paginate: false,
+    })
+    expect(vc.map((r) => r.id)).toEqual([item1.id])
+
+    // bigint[]
+    const bi = await app.service('contains-test').find({
+      query: { bigintArr: { $overlap: [3, 4] } },
+      paginate: false,
+    })
+    expect(bi.map((r) => r.id).sort()).toEqual([item1.id, item2.id].sort())
+
+    // float8[]
+    const fl = await app.service('contains-test').find({
+      query: { floatArr: { $contains: [1.5, 2.5] } },
+      paginate: false,
+    })
+    expect(fl.map((r) => r.id)).toEqual([item1.id])
+
+    // numeric[]
+    const nu = await app.service('contains-test').find({
+      query: { numericArr: { $contained: [1, 2, 3, 4] } },
+      paginate: false,
+    })
+    expect(nu.map((r) => r.id)).toEqual([item1.id])
+
+    // char(4)[] - parenthesized type qualifier
+    const ch = await app.service('contains-test').find({
+      query: { charArr: { $contains: ['aaaa'] } },
+      paginate: false,
+    })
+    expect(ch.map((r) => r.id)).toEqual([item1.id])
+
+    // date[] - no temporal coercion interference for array operators
+    const dt = await app.service('contains-test').find({
+      query: { dateArr: { $contains: ['2026-06-17'] } },
+      paginate: false,
+    })
+    expect(dt.map((r) => r.id)).toEqual([item1.id])
   })
 
   it('array contains/contained/overlaps jsonb works', async () => {
