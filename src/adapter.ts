@@ -31,7 +31,6 @@ import type {
 import { expressionBuilder, sql } from 'kysely'
 import type {
   SelectExpression,
-  ComparisonOperatorExpression,
   DeleteQueryBuilder,
   InsertQueryBuilder,
   Kysely,
@@ -42,52 +41,20 @@ import type {
 } from 'kysely'
 import {
   applySelectId,
+  buildJsonbContainment,
   coerceTemporalQueryProperty,
   convertBooleansToNumbers,
+  getDatabaseDialect,
+  getOperator,
   getOrderByModifier,
   getSortDirection,
+  OPERATORS,
+  POSTGRES_ONLY_OPERATORS,
   temporalKind,
+  transformOperatorValue,
   traverseJSON,
-} from './utils.js'
+} from './utils/index.js'
 import { addToQuery } from 'feathers-utils'
-
-// See https://kysely-org.github.io/kysely-apidoc/variables/OPERATORS.html
-const OPERATORS: Record<string, ComparisonOperatorExpression> = {
-  $lt: '<',
-  $lte: '<=',
-  $gt: '>',
-  $gte: '>=',
-  $in: 'in',
-  $nin: 'not in',
-  $eq: '=',
-  $ne: '!=',
-  $like: 'like',
-  $notLike: 'not like',
-  $iLike: 'ilike',
-  $contains: '@>',
-  $contained: '<@',
-  $overlap: '&&',
-}
-
-// Operators that only exist in Postgres. They are not registered (and therefore
-// rejected by Feathers with a BadRequest) on other dialects. NOTE: $iLike is
-// intentionally NOT here — it is translated to a case-insensitive LIKE instead.
-const POSTGRES_ONLY_OPERATORS = ['$contains', '$contained', '$overlap']
-
-function getDatabaseDialect(db: Kysely<any>): DialectType {
-  const adapterName = db.getExecutor().adapter.constructor.name.toLowerCase()
-
-  if (adapterName.includes('sqlite')) return 'sqlite'
-  if (adapterName.includes('postgres')) return 'postgres'
-  if (adapterName.includes('mysql')) return 'mysql'
-  if (adapterName.includes('mssql') || adapterName.includes('sqlserver')) {
-    throw new Error(
-      'MSSQL is not supported by feathers-kysely. Supported dialects: postgres, mysql, sqlite.',
-    )
-  }
-
-  return 'sqlite'
-}
 
 // TODO: $between, $notBetween
 
@@ -96,8 +63,7 @@ function getDatabaseDialect(db: Kysely<any>): DialectType {
 // from every row before the result is returned.
 const PAGINATION_TOTAL_KEY = '__fk_total'
 
-const FILTERS = ['$select', '$sort', '$limit', '$skip'] as const
-type Filter = (typeof FILTERS)[number]
+const FILTERS = new Set<string>(['$select', '$sort', '$limit', '$skip'])
 
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
@@ -416,7 +382,7 @@ export class KyselyAdapter<
     for (const key in query) {
       const value = query[key]
 
-      if (FILTERS.includes(key as Filter)) {
+      if (FILTERS.has(key)) {
         out[key] = value
         continue
       }
@@ -559,7 +525,7 @@ export class KyselyAdapter<
     if (!this.options.relations) return { q, query }
 
     for (const key in query) {
-      if (FILTERS.includes(key as Filter)) continue
+      if (FILTERS.has(key)) continue
 
       if ((key === '$and' || key === '$or') && Array.isArray(query[key])) {
         let array = query[key]
@@ -880,6 +846,7 @@ export class KyselyAdapter<
     eb: ExpressionBuilder<any, any>,
     column: any,
     queryProperty: any,
+    propertyType?: string,
   ) {
     if (_.isObject(queryProperty)) {
       const qs: any[] = []
@@ -898,10 +865,26 @@ export class KyselyAdapter<
           continue
         }
 
-        const op = this.getOperator(operator, value)
+        // For a `jsonb`/`json` column the Postgres containment/overlap operators
+        // need jsonb operands - the native-array codegen in
+        // `transformOperatorValue` (`@> ARRAY[...]::text[]`) is only valid for
+        // genuine `text[]`/`integer[]` columns.
+        if (
+          (propertyType === 'jsonb' || propertyType === 'json') &&
+          (operator === '$contains' ||
+            operator === '$contained' ||
+            operator === '$overlap')
+        ) {
+          qs.push(buildJsonbContainment(eb, column, operator, value))
+          continue
+        }
+
+        const op = getOperator(operator, value, this.options.dialectType)
         if (!op) continue
 
-        qs.push(eb(column, op, this.transformOperatorValue(operator, value)))
+        qs.push(
+          eb(column, op, transformOperatorValue(operator, value, propertyType)),
+        )
       }
 
       if (qs.length) {
@@ -911,7 +894,7 @@ export class KyselyAdapter<
       // no operators matched - fall through to simple equality check
     }
 
-    const op = this.getOperator('$eq', queryProperty)
+    const op = getOperator('$eq', queryProperty, this.options.dialectType)
     if (!op) return
     return eb(column, op, queryProperty)
   }
@@ -948,12 +931,13 @@ export class KyselyAdapter<
     // (via `getPropertyType` or an `x-db-type` schema annotation), normalize
     // Date / ISO-string / epoch-ms / "YYYY-MM-DD" query values into the
     // canonical string the driver compares correctly.
-    const kind = temporalKind(this.getPropertyType(queryKey))
+    const dbType = this.getPropertyType(queryKey)
+    const kind = temporalKind(dbType)
     const property = kind
       ? coerceTemporalQueryProperty(queryProperty, kind)
       : queryProperty
 
-    return this.buildPropertyExpression(eb, col, property)
+    return this.buildPropertyExpression(eb, col, property, dbType)
   }
 
   private applyJoinsForOrderBy<Q extends Record<string, any>>(
@@ -987,51 +971,6 @@ export class KyselyAdapter<
     }
 
     return q
-  }
-
-  private getOperator(op: string, value: any) {
-    if (value === null) {
-      if (op === '$ne') return 'is not'
-      if (op === '$eq') return 'is'
-      return OPERATORS[op]
-    }
-
-    // No dialect except Postgres has an ILIKE keyword. MySQL's default collation
-    // is case-insensitive and SQLite's LIKE is case-insensitive for ASCII, so
-    // plain LIKE gives equivalent behavior for typical input (case folding of
-    // non-ASCII on SQLite/MySQL depends on the column collation).
-    if (op === '$iLike' && this.options.dialectType !== 'postgres') {
-      return 'like'
-    }
-
-    return OPERATORS[op]
-  }
-
-  private transformOperatorValue(op: string, value: any) {
-    if (op !== '$contains' && op !== '$contained' && op !== '$overlap') {
-      return value
-    }
-
-    if (!value) {
-      return value
-    }
-
-    if (!Array.isArray(value)) {
-      throw new BadRequest(`The value for '${op}' must be an array`)
-    }
-
-    // These are the Postgres array operators (@>, <@, &&). Build a properly
-    // typed array literal with every element bound as a parameter, casting
-    // based on the first element's type so Postgres can infer the array type.
-    const firstElement = value[0]
-    if (typeof firstElement === 'number') {
-      return sql`ARRAY[${sql.join(value)}]::integer[]`
-    } else if (typeof firstElement === 'string') {
-      return sql`ARRAY[${sql.join(value)}]::text[]`
-    } else {
-      // Default case - let PostgreSQL try to infer
-      return sql`ARRAY[${sql.join(value)}]`
-    }
   }
 
   private col<T>(
@@ -1075,7 +1014,7 @@ export class KyselyAdapter<
     options?: HandleQueryOptions,
   ) {
     // ignore filters - just for safety
-    if (FILTERS.includes(queryKey as Filter)) {
+    if (FILTERS.has(queryKey)) {
       return undefined
     }
 
