@@ -46,7 +46,7 @@ function setup() {
       .addColumn('id', 'serial', (col) => col.primaryKey())
       .addColumn('str', 'varchar')
       .addColumn('intArr', sql`integer[]`)
-      .addColumn('strArr', sql`varchar[]`)
+      .addColumn('strArr', sql`text[]`)
       .addColumn('jsonArr', 'jsonb')
       .execute()
   }
@@ -60,6 +60,12 @@ function setup() {
       id: 'id',
       name: 'contains_test',
       multi: true,
+      properties: {
+        // Declares the column as jsonb so containment/overlap operators emit
+        // jsonb operands instead of the native-array codegen used for
+        // genuine integer[]/varchar[] columns.
+        jsonArr: { type: 'array', 'x-db-type': 'jsonb' },
+      },
     }),
   )
 
@@ -89,232 +95,285 @@ const { app, db, clean } = setup()
 
 const dialectName = getDialect()
 
-describe.skipIf(dialectName !== 'postgres' || true /** TODO */)(
-  'special operators',
-  () => {
-    beforeEach(clean)
+describe.skipIf(dialectName !== 'postgres')('special operators', () => {
+  beforeEach(clean)
 
-    afterAll(() => db.destroy())
+  afterAll(() => db.destroy())
 
-    it('$like works', async () => {
-      const [item1, item2] = await app.service('contains-test').create([
-        {
-          str: 'hello world',
-        },
-        { str: 'goodbye world' },
-      ])
+  it('$like works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        str: 'hello world',
+      },
+      { str: 'goodbye world' },
+    ])
 
-      const findResult = await app.service('contains-test').find({
-        query: {
-          str: { $like: '%hello%' },
-        },
-        paginate: false,
-      })
-
-      expect(findResult.length).toBe(1)
-      expect(findResult[0].id).toBe(item1.id)
-
-      const findResult2 = await app.service('contains-test').find({
-        query: {
-          str: { $like: '%world' },
-        },
-        paginate: false,
-      })
-
-      expect(findResult2.length).toBe(2)
+    const findResult = await app.service('contains-test').find({
+      query: {
+        str: { $like: '%hello%' },
+      },
+      paginate: false,
     })
 
-    it('%iLike works', async () => {
-      const [item1, item2] = await app.service('contains-test').create([
-        {
-          str: 'Hello World',
-        },
-        { str: 'Goodbye World' },
-      ])
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
 
-      const findResult = await app.service('contains-test').find({
-        query: {
-          str: { $iLike: '%hello%' },
-        },
-        paginate: false,
-      })
-
-      expect(findResult.length).toBe(1)
-      expect(findResult[0].id).toBe(item1.id)
-
-      const findResult2 = await app.service('contains-test').find({
-        query: {
-          str: { $iLike: '%world' },
-        },
-        paginate: false,
-      })
-
-      expect(findResult2.length).toBe(2)
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        str: { $like: '%world' },
+      },
+      paginate: false,
     })
 
-    it('array contains/contained/overlaps integer[] works', async () => {
-      const [item1, item2] = await app.service('contains-test').create([
-        {
-          intArr: [1, 2, 3],
-        },
-        {
-          intArr: [3, 4, 5],
-        },
-      ])
+    expect(findResult2.length).toBe(2)
+  })
 
-      expect(item1.intArr).toEqual([1, 2, 3])
+  it('%iLike works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        str: 'Hello World',
+      },
+      { str: 'Goodbye World' },
+    ])
 
-      // contains subset
-      const findResult = await app.service('contains-test').find({
-        query: {
-          intArr: { $contains: [1, 2] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult.length).toBe(1)
-      expect(findResult[0].id).toBe(item1.id)
-
-      // contains bigger
-      const findResult2 = await app.service('contains-test').find({
-        query: {
-          intArr: { $contains: [1, 2, 3, 4] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult2.length).toBe(0)
-
-      // contained
-      const findResult3 = await app.service('contains-test').find({
-        query: {
-          intArr: { $contained: [1, 2, 3, 4] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult3.length).toBe(1)
-      expect(findResult3[0].id).toBe(item1.id)
-
-      // overlaps
-      const findResult4 = await app.service('contains-test').find({
-        query: {
-          intArr: { $overlap: [2, 3, 4] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult4.length).toBe(2)
+    const findResult = await app.service('contains-test').find({
+      query: {
+        str: { $iLike: '%hello%' },
+      },
+      paginate: false,
     })
 
-    it('array contains/contained/overlaps varchar[] works', async () => {
-      const [item1, item2] = await app.service('contains-test').create([
-        {
-          strArr: ['a', 'b', 'c'],
-        },
-        {
-          strArr: ['c', 'd', 'e'],
-        },
-      ])
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
 
-      expect(item1.strArr).toEqual(['a', 'b', 'c'])
-
-      // contains subset
-      const findResult = await app.service('contains-test').find({
-        query: {
-          strArr: { $contains: ['a', 'b'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult.length).toBe(1)
-      expect(findResult[0].id).toBe(item1.id)
-
-      // contains bigger
-      const findResult2 = await app.service('contains-test').find({
-        query: {
-          strArr: { $contains: ['a', 'b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult2.length).toBe(0)
-
-      // contained
-      const findResult3 = await app.service('contains-test').find({
-        query: {
-          strArr: { $contained: ['a', 'b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult3.length).toBe(1)
-      expect(findResult3[0].id).toBe(item1.id)
-
-      // overlaps
-      const findResult4 = await app.service('contains-test').find({
-        query: {
-          strArr: { $overlap: ['b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult4.length).toBe(2)
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        str: { $iLike: '%world' },
+      },
+      paginate: false,
     })
 
-    it('array contains/contained/overlaps jsonb works', async () => {
-      const [item1, item2] = await app.service('contains-test').create([
-        {
-          jsonArr: ['a', 'b', 'c'],
-        },
-        {
-          jsonArr: ['c', 'd', 'e'],
-        },
-      ])
+    expect(findResult2.length).toBe(2)
+  })
 
-      expect(item1.jsonArr).toEqual(['a', 'b', 'c'])
+  it('array contains/contained/overlaps integer[] works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        intArr: [1, 2, 3],
+      },
+      {
+        intArr: [3, 4, 5],
+      },
+    ])
 
-      // contains subset
-      const findResult = await app.service('contains-test').find({
-        query: {
-          jsonArr: { $contains: ['a', 'b'] },
-        },
-        paginate: false,
-      })
+    expect(item1.intArr).toEqual([1, 2, 3])
 
-      expect(findResult.length).toBe(1)
-      expect(findResult[0].id).toBe(item1.id)
-
-      // contains bigger
-      const findResult2 = await app.service('contains-test').find({
-        query: {
-          jsonArr: { $contains: ['a', 'b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult2.length).toBe(0)
-
-      // contained
-      const findResult3 = await app.service('contains-test').find({
-        query: {
-          jsonArr: { $contained: ['a', 'b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult3.length).toBe(1)
-      expect(findResult3[0].id).toBe(item1.id)
-
-      // overlaps
-      const findResult4 = await app.service('contains-test').find({
-        query: {
-          jsonArr: { $overlap: ['b', 'c', 'd'] },
-        },
-        paginate: false,
-      })
-
-      expect(findResult4.length).toBe(2)
+    // contains subset
+    const findResult = await app.service('contains-test').find({
+      query: {
+        intArr: { $contains: [1, 2] },
+      },
+      paginate: false,
     })
-  },
-)
+
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
+
+    // contains bigger
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        intArr: { $contains: [1, 2, 3, 4] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult2.length).toBe(0)
+
+    // contained
+    const findResult3 = await app.service('contains-test').find({
+      query: {
+        intArr: { $contained: [1, 2, 3, 4] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult3.length).toBe(1)
+    expect(findResult3[0].id).toBe(item1.id)
+
+    // overlaps
+    const findResult4 = await app.service('contains-test').find({
+      query: {
+        intArr: { $overlap: [2, 3, 4] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult4.length).toBe(2)
+  })
+
+  it('array contains/contained/overlaps text[] works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        strArr: ['a', 'b', 'c'],
+      },
+      {
+        strArr: ['c', 'd', 'e'],
+      },
+    ])
+
+    expect(item1.strArr).toEqual(['a', 'b', 'c'])
+
+    // contains subset
+    const findResult = await app.service('contains-test').find({
+      query: {
+        strArr: { $contains: ['a', 'b'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
+
+    // contains bigger
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        strArr: { $contains: ['a', 'b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult2.length).toBe(0)
+
+    // contained
+    const findResult3 = await app.service('contains-test').find({
+      query: {
+        strArr: { $contained: ['a', 'b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult3.length).toBe(1)
+    expect(findResult3[0].id).toBe(item1.id)
+
+    // overlaps
+    const findResult4 = await app.service('contains-test').find({
+      query: {
+        strArr: { $overlap: ['b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult4.length).toBe(2)
+  })
+
+  it('array contains/contained/overlaps jsonb works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        jsonArr: ['a', 'b', 'c'],
+      },
+      {
+        jsonArr: ['c', 'd', 'e'],
+      },
+    ])
+
+    expect(item1.jsonArr).toEqual(['a', 'b', 'c'])
+
+    // contains single element -> column @> '["a"]'::jsonb
+    const findResultSingle = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contains: ['a'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResultSingle.length).toBe(1)
+    expect(findResultSingle[0].id).toBe(item1.id)
+
+    // contains subset
+    const findResult = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contains: ['a', 'b'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
+
+    // contains bigger
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contains: ['a', 'b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult2.length).toBe(0)
+
+    // contained
+    const findResult3 = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contained: ['a', 'b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult3.length).toBe(1)
+    expect(findResult3[0].id).toBe(item1.id)
+
+    // overlaps
+    const findResult4 = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $overlap: ['b', 'c', 'd'] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult4.length).toBe(2)
+  })
+
+  it('array contains/contained/overlaps numeric jsonb works', async () => {
+    const [item1, item2] = await app.service('contains-test').create([
+      {
+        jsonArr: [1, 2, 3],
+      },
+      {
+        jsonArr: [3, 4, 5],
+      },
+    ])
+
+    expect(item1.jsonArr).toEqual([1, 2, 3])
+
+    // contains subset
+    const findResult = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contains: [1, 2] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult.length).toBe(1)
+    expect(findResult[0].id).toBe(item1.id)
+
+    // contained
+    const findResult2 = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $contained: [1, 2, 3, 4] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult2.length).toBe(1)
+    expect(findResult2[0].id).toBe(item1.id)
+
+    // overlaps - validates the OR-of-@> fallback for numeric jsonb arrays
+    const findResult3 = await app.service('contains-test').find({
+      query: {
+        jsonArr: { $overlap: [2, 3, 4] },
+      },
+      paginate: false,
+    })
+
+    expect(findResult3.length).toBe(2)
+  })
+})

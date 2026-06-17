@@ -880,6 +880,7 @@ export class KyselyAdapter<
     eb: ExpressionBuilder<any, any>,
     column: any,
     queryProperty: any,
+    propertyType?: string,
   ) {
     if (_.isObject(queryProperty)) {
       const qs: any[] = []
@@ -895,6 +896,20 @@ export class KyselyAdapter<
           qs.push(
             operator === '$in' ? sql<boolean>`1 = 0` : sql<boolean>`1 = 1`,
           )
+          continue
+        }
+
+        // For a `jsonb`/`json` column the Postgres containment/overlap operators
+        // need jsonb operands - the native-array codegen in
+        // `transformOperatorValue` (`@> ARRAY[...]::text[]`) is only valid for
+        // genuine `text[]`/`integer[]` columns.
+        if (
+          (propertyType === 'jsonb' || propertyType === 'json') &&
+          (operator === '$contains' ||
+            operator === '$contained' ||
+            operator === '$overlap')
+        ) {
+          qs.push(this.buildJsonbContainment(eb, column, operator, value))
           continue
         }
 
@@ -948,12 +963,13 @@ export class KyselyAdapter<
     // (via `getPropertyType` or an `x-db-type` schema annotation), normalize
     // Date / ISO-string / epoch-ms / "YYYY-MM-DD" query values into the
     // canonical string the driver compares correctly.
-    const kind = temporalKind(this.getPropertyType(queryKey))
+    const dbType = this.getPropertyType(queryKey)
+    const kind = temporalKind(dbType)
     const property = kind
       ? coerceTemporalQueryProperty(queryProperty, kind)
       : queryProperty
 
-    return this.buildPropertyExpression(eb, col, property)
+    return this.buildPropertyExpression(eb, col, property, dbType)
   }
 
   private applyJoinsForOrderBy<Q extends Record<string, any>>(
@@ -1032,6 +1048,52 @@ export class KyselyAdapter<
       // Default case - let PostgreSQL try to infer
       return sql`ARRAY[${sql.join(value)}]`
     }
+  }
+
+  /**
+   * Build the Postgres containment/overlap expression for a `jsonb`/`json`
+   * column. Unlike the native-array codegen in `transformOperatorValue`, the
+   * operands here are themselves `jsonb` so the comparison is `jsonb`-vs-`jsonb`:
+   *
+   *   $contains  ->  column @> '[...]'::jsonb   (column contains all listed elements)
+   *   $contained ->  column <@ '[...]'::jsonb   (column is contained by the list)
+   *   $overlap   ->  (column @> '[a]'::jsonb OR column @> '[b]'::jsonb ...)
+   *
+   * `$overlap` has no native `jsonb &&` operator, so we express "any listed
+   * element present" as an OR of single-element containment checks. This works
+   * for both string and numeric jsonb arrays (avoiding the string-only `?|`
+   * key-existence operator). The JSON payload is always bound as a parameter.
+   */
+  private buildJsonbContainment(
+    eb: ExpressionBuilder<any, any>,
+    column: any,
+    operator: '$contains' | '$contained' | '$overlap',
+    value: any,
+  ) {
+    if (!Array.isArray(value)) {
+      throw new BadRequest(`The value for '${operator}' must be an array`)
+    }
+
+    const ref = sql.ref(column)
+
+    if (operator === '$contains') {
+      return sql<boolean>`${ref} @> ${JSON.stringify(value)}::jsonb`
+    }
+
+    if (operator === '$contained') {
+      return sql<boolean>`${ref} <@ ${JSON.stringify(value)}::jsonb`
+    }
+
+    // $overlap: any listed element present. An empty list overlaps nothing.
+    if (value.length === 0) {
+      return sql<boolean>`1 = 0`
+    }
+
+    return eb.or(
+      value.map(
+        (element) => sql<boolean>`${ref} @> ${JSON.stringify([element])}::jsonb`,
+      ),
+    )
   }
 
   private col<T>(
