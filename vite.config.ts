@@ -1,7 +1,12 @@
 import { defineConfig } from 'vitest/config'
-import dotenv from 'dotenv'
+import { existsSync } from 'node:fs'
+import { loadEnvFile } from 'node:process'
 
-dotenv.config()
+// Like dotenv: existing environment variables take precedence over `.env`.
+// Guard the call — loadEnvFile throws if no `.env` exists (e.g. in CI).
+if (existsSync('.env')) {
+  loadEnvFile()
+}
 
 export default defineConfig({
   define: {

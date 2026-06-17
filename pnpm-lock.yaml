@@ -42,18 +42,12 @@ importers:
       better-sqlite3:
         specifier: ^12.10.0
         version: 12.10.0
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       eslint:
         specifier: ^10.4.1
         version: 10.4.1
       feathers-adapter-vitest:
         specifier: ^0.0.17
         version: 0.0.17(@feathersjs/errors@5.0.44)(@feathersjs/feathers@5.0.44)(vitest@4.1.8(@types/node@25.9.1)(vite@8.0.15(@types/node@25.9.1)))
-      feathers-hooks-common:
-        specifier: ^8.2.1
-        version: 8.2.1(@feathersjs/feathers@5.0.44)
       kysely:
         specifier: ^0.29.2
         version: 0.29.2
@@ -1320,10 +1314,6 @@ packages:
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
 
-  dotenv@17.4.2:
-    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
-    engines: {node: '>=12'}
-
   dts-resolver@3.0.0:
     resolution: {integrity: sha512-1T1f+z+4tl9XD+m+0HBgWoL/nm0bOIffyWaUuUSBlFg/86IWvfx+wjNaO/ybU0AJzG9/Mi5hBUgGV6zCmWEN7Q==}
     engines: {node: ^22.18.0 || >=24.0.0}
@@ -1564,12 +1554,6 @@ packages:
       '@feathersjs/feathers': ^5.0.0
       vitest: ^3.0.0
 
-  feathers-hooks-common@8.2.1:
-    resolution: {integrity: sha512-t3gLAaTY5ufnAoKczLCNXJddq/L9ORrvxAlfuU2Azgoi0b6X3t0Y91l1JCJAvixzxxwLJmgdnKpFX32+CvEn0A==}
-    engines: {node: '>= 18'}
-    peerDependencies:
-      '@feathersjs/feathers': ^5.0.0
-
   feathers-utils@10.0.2:
     resolution: {integrity: sha512-HODvOqBNVemJQn+gHAPKzMaYU6oRu0SpLb15KyJX0dLJhlevSKimzyZauO3/gFI9ovKM50W4hXsGlKaSYyMKfQ==}
     engines: {node: '>=22.0.0'}
@@ -1651,10 +1635,6 @@ packages:
   globals@17.6.0:
     resolution: {integrity: sha512-sepffkT8stwnIYbsMBpoCHJuJM5l98FUF2AnE07hfvE0m/qp3R586hw4jF4uadbhvg1ooIdzuu7CsfD2jzCaNA==}
     engines: {node: '>=18'}
-
-  graphql@16.14.0:
-    resolution: {integrity: sha512-BBvQ/406p+4CZbTpCbVPSxfzrZrbnuWSP1ELYgyS6B+hNeKzgrdB4JczCa5VZUBQrDa9hUngm0KnexY6pJRN5Q==}
-    engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
 
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
@@ -3788,8 +3768,6 @@ snapshots:
     dependencies:
       dequal: 2.0.3
 
-  dotenv@17.4.2: {}
-
   dts-resolver@3.0.0: {}
 
   electron-to-chromium@1.5.364: {}
@@ -4060,18 +4038,6 @@ snapshots:
       '@feathersjs/feathers': 5.0.44
       vitest: 4.1.8(@types/node@25.9.1)(vite@8.0.15(@types/node@25.9.1))
 
-  feathers-hooks-common@8.2.1(@feathersjs/feathers@5.0.44):
-    dependencies:
-      '@feathersjs/errors': 5.0.44
-      '@feathersjs/feathers': 5.0.44
-      ajv: 6.15.0
-      debug: 4.4.3
-      graphql: 16.14.0
-      lodash: 4.18.1
-      neotraverse: 0.6.18
-    transitivePeerDependencies:
-      - supports-color
-
   feathers-utils@10.0.2(@feathersjs/feathers@5.0.44):
     dependencies:
       '@feathersjs/adapter-commons': 5.0.44
@@ -4146,8 +4112,6 @@ snapshots:
       is-glob: 4.0.3
 
   globals@17.6.0: {}
-
-  graphql@16.14.0: {}
 
   hasown@2.0.4:
     dependencies:
