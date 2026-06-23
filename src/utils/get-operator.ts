@@ -14,15 +14,37 @@ export const OPERATORS: Record<string, ComparisonOperatorExpression> = {
   $like: 'like',
   $notLike: 'not like',
   $iLike: 'ilike',
+  $notILike: 'not ilike',
   $contains: '@>',
   $contained: '<@',
   $overlap: '&&',
 }
 
 // Operators that only exist in Postgres. They are not registered (and therefore
-// rejected by Feathers with a BadRequest) on other dialects. NOTE: $iLike is
-// intentionally NOT here — it is translated to a case-insensitive LIKE instead.
+// rejected by Feathers with a BadRequest) on other dialects. NOTE: $iLike /
+// $notILike are intentionally NOT here — they fall back to a case-insensitive
+// LIKE on the other dialects instead.
 export const POSTGRES_ONLY_OPERATORS = ['$contains', '$contained', '$overlap']
+
+// Operators handled by special branches in `buildPropertyExpression` (i.e. NOT
+// in the OPERATORS map), grouped by dialect availability so the constructor can
+// register exactly the ones each dialect supports. Unregistered operators are
+// rejected by Feathers with a BadRequest.
+export const ALL_DIALECTS_OPERATORS = [
+  '$between',
+  '$notBetween',
+  '$startsWith',
+  '$endsWith',
+] as const
+// Regex match: Postgres (~/!~) and MySQL (regexp) only — SQLite has no built-in
+// REGEXP, so it is rejected there rather than emitting SQL that errors at runtime.
+export const NON_SQLITE_OPERATORS = ['$regex', '$notRegex'] as const
+// jsonb key-existence: Postgres-only (jsonb_exists / _any / _all).
+export const POSTGRES_ONLY_JSON_OPERATORS = [
+  '$hasKey',
+  '$hasKeyAny',
+  '$hasKeyAll',
+] as const
 
 /**
  * Resolve a Feathers query operator to the Kysely comparison operator, applying
@@ -44,10 +66,10 @@ export function getOperator(
 
   // No dialect except Postgres has an ILIKE keyword. MySQL's default collation
   // is case-insensitive and SQLite's LIKE is case-insensitive for ASCII, so
-  // plain LIKE gives equivalent behavior for typical input (case folding of
+  // plain (NOT) LIKE gives equivalent behavior for typical input (case folding of
   // non-ASCII on SQLite/MySQL depends on the column collation).
-  if (op === '$iLike' && dialectType !== 'postgres') {
-    return 'like'
+  if ((op === '$iLike' || op === '$notILike') && dialectType !== 'postgres') {
+    return op === '$iLike' ? 'like' : 'not like'
   }
 
   return OPERATORS[op]
@@ -77,6 +99,13 @@ if (import.meta.vitest) {
       expect(getOperator('$iLike', 'x', 'mysql')).toBe('like')
       expect(getOperator('$iLike', 'x', 'sqlite')).toBe('like')
       expect(getOperator('$iLike', 'x', undefined)).toBe('like')
+    })
+
+    it('keeps not ilike on Postgres but falls back to not like elsewhere', () => {
+      expect(getOperator('$notILike', 'x', 'postgres')).toBe('not ilike')
+      expect(getOperator('$notILike', 'x', 'mysql')).toBe('not like')
+      expect(getOperator('$notILike', 'x', 'sqlite')).toBe('not like')
+      expect(getOperator('$notILike', 'x', undefined)).toBe('not like')
     })
   })
 
