@@ -23,7 +23,11 @@ export function buildLikePattern(
   const pattern = operator === '$startsWith' ? `${escaped}%` : `%${escaped}`
 
   const ref = typeof column === 'string' ? sql.ref(column) : column
-  return sql<boolean>`${ref} like ${pattern} escape '\\'`
+  // `sql.lit` renders the backslash escape char with dialect-correct quoting:
+  // MySQL processes backslashes inside string literals (so it needs `'\\'`),
+  // Postgres/SQLite do not (`'\'`). A literal `escape '\'` would be a syntax
+  // error on MySQL.
+  return sql<boolean>`${ref} like ${pattern} escape ${sql.lit('\\')}`
 }
 
 if (import.meta.vitest) {
@@ -34,6 +38,9 @@ if (import.meta.vitest) {
     PostgresAdapter,
     PostgresIntrospector,
     PostgresQueryCompiler,
+    MysqlAdapter,
+    MysqlIntrospector,
+    MysqlQueryCompiler,
     sql: sqlTag,
   } = await import('kysely')
 
@@ -43,6 +50,14 @@ if (import.meta.vitest) {
       createDriver: () => new DummyDriver(),
       createIntrospector: (db) => new PostgresIntrospector(db),
       createQueryCompiler: () => new PostgresQueryCompiler(),
+    },
+  })
+  const my = new Kysely<any>({
+    dialect: {
+      createAdapter: () => new MysqlAdapter(),
+      createDriver: () => new DummyDriver(),
+      createIntrospector: (db) => new MysqlIntrospector(db),
+      createQueryCompiler: () => new MysqlQueryCompiler(),
     },
   })
   const compile = (v: any) => sqlTag`${v}`.compile(pg)
@@ -65,6 +80,14 @@ if (import.meta.vitest) {
     it('builds a suffix LIKE for $endsWith', () => {
       const { parameters } = compile(buildLikePattern('col', '$endsWith', 'bar'))
       expect(parameters).toEqual(['%bar'])
+    })
+
+    it('renders the escape char with dialect-correct quoting on MySQL', () => {
+      // MySQL processes backslashes in string literals, so the escape clause
+      // must be `escape '\\'` there, not the Postgres/SQLite `escape '\'`.
+      const expr = buildLikePattern('col', '$startsWith', 'foo')
+      const compiled = sqlTag`${expr}`.compile(my)
+      expect(compiled.sql).toBe("`col` like ? escape '\\\\'")
     })
 
     it('escapes LIKE wildcards and the escape char in the value', () => {
