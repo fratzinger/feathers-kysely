@@ -20,6 +20,7 @@ interface DB {
     varcharArr: string[]
     dateArr: string[]
     jsonArr: any[]
+    jsonObj: any
   }
 }
 
@@ -35,6 +36,7 @@ type ContainsTest = {
   varcharArr: string[]
   dateArr: string[]
   jsonArr: any[]
+  jsonObj: any
 }
 
 function json<T>(value: T): RawBuilder<T> {
@@ -66,6 +68,7 @@ function setup() {
       .addColumn('varcharArr', sql`varchar[]`)
       .addColumn('dateArr', sql`date[]`)
       .addColumn('jsonArr', 'jsonb')
+      .addColumn('jsonObj', 'jsonb')
       .execute()
   }
 
@@ -106,6 +109,9 @@ function setup() {
         transformData((item: Record<string, any>) => {
           if (item.jsonArr) {
             item.jsonArr = json(item.jsonArr)
+          }
+          if (item.jsonObj) {
+            item.jsonObj = json(item.jsonObj)
           }
         }),
       ],
@@ -471,5 +477,51 @@ describe.skipIf(dialectName !== 'postgres')('special operators', () => {
     })
 
     expect(findResult3.length).toBe(2)
+  })
+
+  it('jsonb $hasKey / $hasKeyAny / $hasKeyAll (object key existence)', async () => {
+    const [item1, item2] = await app
+      .service('contains-test')
+      .create([{ jsonObj: { foo: 1, bar: 2 } }, { jsonObj: { baz: 3 } }])
+
+    // $hasKey: top-level key exists
+    const hasKey = await app.service('contains-test').find({
+      query: { jsonObj: { $hasKey: 'foo' } },
+      paginate: false,
+    })
+    expect(hasKey.map((r) => r.id)).toEqual([item1.id])
+
+    // $hasKeyAny: any of the listed keys exists
+    const hasKeyAny = await app.service('contains-test').find({
+      query: { jsonObj: { $hasKeyAny: ['foo', 'baz'] }, $sort: { id: 1 } },
+      paginate: false,
+    })
+    expect(hasKeyAny.map((r) => r.id)).toEqual([item1.id, item2.id])
+
+    // $hasKeyAll: all listed keys exist
+    const hasKeyAll = await app.service('contains-test').find({
+      query: { jsonObj: { $hasKeyAll: ['foo', 'bar'] } },
+      paginate: false,
+    })
+    expect(hasKeyAll.map((r) => r.id)).toEqual([item1.id])
+
+    const hasKeyAllMiss = await app.service('contains-test').find({
+      query: { jsonObj: { $hasKeyAll: ['foo', 'nope'] } },
+      paginate: false,
+    })
+    expect(hasKeyAllMiss.length).toBe(0)
+  })
+
+  it('jsonb $hasKey on an array column checks element existence', async () => {
+    const [item1] = await app
+      .service('contains-test')
+      .create([{ jsonArr: ['a', 'b', 'c'] }, { jsonArr: ['x', 'y'] }])
+
+    // jsonb_exists on an array tests whether the string is an element.
+    const has = await app.service('contains-test').find({
+      query: { jsonArr: { $hasKey: 'a' } },
+      paginate: false,
+    })
+    expect(has.map((r) => r.id)).toEqual([item1.id])
   })
 })

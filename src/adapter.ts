@@ -40,23 +40,28 @@ import type {
   Expression,
 } from 'kysely'
 import {
+  ALL_DIALECTS_OPERATORS,
   applySelectId,
+  buildBetween,
   buildJsonbContainment,
+  buildJsonbHasKey,
+  buildLikePattern,
+  buildRegexMatch,
   coerceTemporalQueryProperty,
   convertBooleansToNumbers,
   getDatabaseDialect,
   getOperator,
   getOrderByModifier,
   getSortDirection,
+  NON_SQLITE_OPERATORS,
   OPERATORS,
+  POSTGRES_ONLY_JSON_OPERATORS,
   POSTGRES_ONLY_OPERATORS,
   temporalKind,
   transformOperatorValue,
   traverseJSON,
 } from './utils/index.js'
 import { addToQuery } from 'feathers-utils'
-
-// TODO: $between, $notBetween
 
 // Alias for the window-count column injected into the data query so a paginated
 // find can return rows and the grand total in a single round-trip. Stripped
@@ -157,6 +162,11 @@ export class KyselyAdapter<
               dialectType === 'postgres' ||
               !POSTGRES_ONLY_OPERATORS.includes(op),
           ),
+          // Branch operators (handled in buildPropertyExpression), registered per
+          // dialect support so unsupported ones are rejected with a BadRequest.
+          ...ALL_DIALECTS_OPERATORS,
+          ...(dialectType !== 'sqlite' ? NON_SQLITE_OPERATORS : []),
+          ...(dialectType === 'postgres' ? POSTGRES_ONLY_JSON_OPERATORS : []),
           '$none',
           '$some',
           '$every',
@@ -876,6 +886,34 @@ export class KyselyAdapter<
             operator === '$overlap')
         ) {
           qs.push(buildJsonbContainment(eb, column, operator, value))
+          continue
+        }
+
+        // Branch operators that can't be expressed as `eb(column, op, value)`:
+        // range, prefix/suffix LIKE, regex, and jsonb key-existence.
+        if (operator === '$between' || operator === '$notBetween') {
+          qs.push(buildBetween(column, operator, value))
+          continue
+        }
+
+        if (operator === '$startsWith' || operator === '$endsWith') {
+          qs.push(buildLikePattern(column, operator, value))
+          continue
+        }
+
+        if (operator === '$regex' || operator === '$notRegex') {
+          qs.push(
+            buildRegexMatch(column, operator, this.options.dialectType, value),
+          )
+          continue
+        }
+
+        if (
+          operator === '$hasKey' ||
+          operator === '$hasKeyAny' ||
+          operator === '$hasKeyAll'
+        ) {
+          qs.push(buildJsonbHasKey(column, operator, value))
           continue
         }
 
