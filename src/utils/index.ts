@@ -1,4 +1,6 @@
 export * from './apply-select-id.js'
+export * from './apply-update-operators.js'
+export * from './build-array-update.js'
 export * from './traverse-json.js'
 export * from './convert-booleans-to-numbers.js'
 export * from './temporal-kind.js'

@@ -15,12 +15,15 @@ describe('exports', () => {
         // service.ts
         'KyselyService',
 
-        // hooks.ts
+        // hooks/with-transaction.ts
         'getKysely',
         'trxCommit',
         'trxRollback',
         'trxStart',
         'withTransaction',
+
+        // hooks/update-operators.ts
+        'updateOperators',
       ].sort(),
     )
   })

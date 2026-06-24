@@ -813,7 +813,7 @@ export class KyselyAdapter<
    * annotation on the column's entry in `properties` (typically the service's
    * JSON schema `properties` block).
    */
-  private getPropertyType(property: string): string | undefined {
+  getPropertyType(property: string): string | undefined {
     const explicit = this.options.getPropertyType?.(property)
     if (explicit != null) return explicit
 

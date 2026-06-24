@@ -4,7 +4,7 @@ import type { ControlledTransaction, Kysely } from 'kysely'
 import type {
   KyselyAdapterParams,
   KyselyAdapterTransaction,
-} from './declarations.js'
+} from '../declarations.js'
 
 const debug = createDebug('feathers-kysely-transaction')
 
