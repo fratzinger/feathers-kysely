@@ -37,6 +37,7 @@ export default defineConfig({
         items: [
           { text: 'Service & Options', link: '/api/service' },
           { text: 'Query Operators', link: '/api/operators' },
+          { text: 'Update Operators', link: '/api/update-operators' },
           { text: 'Transactions', link: '/api/transactions' },
         ],
       },
