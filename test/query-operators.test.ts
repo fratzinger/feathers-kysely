@@ -76,6 +76,85 @@ describe('query operators (cross-dialect)', () => {
     expect(combined.map((u) => u.name)).toEqual(['a'])
   })
 
+  describe('$not', () => {
+    it('negates a whole condition (single, nested, multi-key)', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 10 },
+        { name: 'b', age: 20 },
+        { name: 'c', age: 20 },
+      ])
+
+      // single key: NOT (age = 20)
+      const single = await app.service('users').find({
+        query: { $not: { age: 20 }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(single.map((u) => u.name)).toEqual(['a'])
+
+      // nested inside $and
+      const nested = await app.service('users').find({
+        query: { $and: [{ $not: { age: 20 } }], $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(nested.map((u) => u.name)).toEqual(['a'])
+
+      // multi-key: NOT (age = 20 AND name = 'b') keeps 'a' (age!=20) and 'c'
+      // (age=20 but name!='b'). A per-property inversion (age!=20 AND name!='b')
+      // would wrongly drop 'c'.
+      const multi = await app.service('users').find({
+        query: { $not: { age: 20, name: 'b' }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(multi.map((u) => u.name)).toEqual(['a', 'c'])
+    })
+
+    it('is operator-agnostic (negates $gt, not just equality)', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 10 },
+        { name: 'b', age: 20 },
+        { name: 'c', age: 30 },
+      ])
+
+      // NOT (age > 15) keeps only 'a'
+      const result = await app.service('users').find({
+        query: { $not: { age: { $gt: 15 } }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(result.map((u) => u.name)).toEqual(['a'])
+    })
+
+    it('around $or follows De Morgan', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 10 },
+        { name: 'b', age: 20 },
+        { name: 'c', age: 30 },
+      ])
+
+      // NOT (age = 10 OR age = 20) === age != 10 AND age != 20 -> keeps 'c'
+      const result = await app.service('users').find({
+        query: {
+          $not: { $or: [{ age: 10 }, { age: 20 }] },
+          $sort: { name: 1 },
+        },
+        paginate: false,
+      })
+      expect(result.map((u) => u.name)).toEqual(['c'])
+    })
+
+    it('with an empty condition is a no-op', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 10 },
+        { name: 'b', age: 20 },
+      ])
+
+      const result = await app.service('users').find({
+        query: { $not: {}, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(result.map((u) => u.name)).toEqual(['a', 'b'])
+    })
+  })
+
   it('$startsWith / $endsWith', async () => {
     await app.service('users').create([
       { name: 'alpha', age: 1 },

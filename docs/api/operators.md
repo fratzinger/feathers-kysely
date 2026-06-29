@@ -148,6 +148,29 @@ await app.service("users").find({
 });
 ```
 
+### `$not`
+
+`$not` negates an entire condition object at the database level — it compiles to
+`NOT (...)` around whatever the inner query produces. It is **operator-agnostic**:
+the inner condition can use any operator, nested `$and` / `$or`, or multiple keys.
+
+```ts
+// NOT (age = 20)
+await app.service("users").find({ query: { $not: { age: 20 } } });
+
+// NOT (age > 15) — works with any operator, not just equality
+await app.service("users").find({ query: { $not: { age: { $gt: 15 } } } });
+
+// De Morgan: NOT (age = 10 OR age = 20) === age != 10 AND age != 20
+await app.service("users").find({
+  query: { $not: { $or: [{ age: 10 }, { age: 20 }] } },
+});
+```
+
+Because the whole object is negated as a unit, a **multi-key** condition negates
+the conjunction — `$not: { age: 20, name: "b" }` is `NOT (age = 20 AND name = "b")`,
+not a per-property inversion. An empty `$not: {}` is a no-op.
+
 ## Querying JSON Columns
 
 Once a column is [declared as `json` or `jsonb`](./service#declaring-column-types),

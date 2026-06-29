@@ -151,6 +151,7 @@ export class KyselyAdapter<
       filters: {
         ...options.filters,
         $and: (value: any) => value,
+        $not: (value: any) => value,
       },
       operators: [
         ...new Set([
@@ -170,6 +171,7 @@ export class KyselyAdapter<
           '$none',
           '$some',
           '$every',
+          '$not',
         ]),
       ],
     })
@@ -961,6 +963,14 @@ export class KyselyAdapter<
       }
 
       return subs?.length ? method(subs) : undefined
+    }
+
+    if (queryKey === '$not') {
+      // Negate the whole condition object at the DB level: NOT (k1 AND k2 ...).
+      // Operator-agnostic and correct for multi-key conditions, unlike a
+      // per-property inversion.
+      const result = this.handleQuery(eb, queryProperty, options)
+      return result?.length ? eb.not(eb.and(result)) : undefined
     }
 
     const col = this.col(queryKey, { tableName: options?.tableName })
