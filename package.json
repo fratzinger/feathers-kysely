@@ -20,7 +20,7 @@
     "url": "https://github.com/fratzinger/feathers-kysely/issues"
   },
   "engines": {
-    "node": ">= 22"
+    "node": ">= 24"
   },
   "files": [
     "LICENSE",
