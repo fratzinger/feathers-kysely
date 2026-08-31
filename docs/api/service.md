@@ -85,3 +85,48 @@ new KyselyService({
 
 Recognized types are `'json'`, `'jsonb'`, `'date'`, `'timestamp'`,
 `'timestamptz'`, and `'datetime'`.
+
+## Skipping the return value
+
+The mutating methods (`create`, `update`, `patch`, `remove`) return the written
+rows by default. For fire-and-forget writes you can opt out with
+`params.kysely.returning: false`:
+
+```ts
+await app.service("logs").create(rows, { kysely: { returning: false } });
+```
+
+The adapter then skips the `RETURNING` clause and every post-fetch. A single
+call resolves to `undefined`, a multi call to `[]` — and the emitted Feathers
+event (`created`/`patched`/`updated`/`removed`) carries that same empty payload.
+
+| Call                                                                 | Resolves to |
+| -------------------------------------------------------------------- | ----------- |
+| `create(data)`, `update(id, data)`, `patch(id, data)`, `remove(id)`   | `undefined` |
+| `create([...])`, `patch(null, data)`, `remove(null)`                  | `[]`        |
+
+`NotFound` is still enforced: a single `update`, `patch` or `remove` that matches
+no row rejects as usual. Existence is derived from the statement's affected-row
+count on PostgreSQL/SQLite, and from the pre-fetch MySQL performs anyway — so
+you keep the error semantics without paying for the read.
+
+For `create`, `returning: false` also overrides
+[`onConflictReturning`](../guides/upsert#controlling-the-returned-rows),
+forcing `'none'`.
+
+::: tip What it actually saves
+- **`create`** — the entire read is gone. The biggest win is on MySQL, which has
+  no `RETURNING` and otherwise needs a separate `SELECT` round-trip to read the
+  inserted rows back.
+- **`patch` / `remove`** — the post-fetch is gone. On MySQL the pre-fetch
+  `SELECT` that builds the `WHERE` clause still runs, so only one of the two
+  round-trips is saved there.
+- **`update`** — replaces a row, so it always reads the existing row first (only
+  the id when [`properties`](#options) is configured). Only the post-fetch is
+  saved.
+:::
+
+::: warning TypeScript
+The service types still declare `Promise<Result>`. With `returning: false` a
+single mutation resolves to `undefined` at runtime.
+:::

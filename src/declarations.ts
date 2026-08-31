@@ -141,6 +141,27 @@ export interface KyselyParams<T = any> {
    * @default 'all'
    */
   onConflictReturning?: 'all' | 'written' | 'changed' | 'none'
+  /**
+   * When `false`, the mutating methods (`create`, `patch`, `update`, `remove`)
+   * skip the `RETURNING` clause and every post-fetch, resolving to `undefined`
+   * for a single call and `[]` for a multi call. Use for fire-and-forget writes
+   * where the result is irrelevant — the biggest win is on MySQL, which has no
+   * `RETURNING` and otherwise needs a separate round-trip to read the
+   * written/affected rows back.
+   *
+   * A single call that matches no row still throws `NotFound`: existence is
+   * derived from the statement's affected-row count (Postgres/SQLite) or from
+   * the pre-fetch MySQL already performs. The emitted Feathers event
+   * (`created`/`patched`/`updated`/`removed`) carries `undefined`/`[]`.
+   *
+   * For `create` this also overrides `onConflictReturning`, forcing `'none'`.
+   *
+   * Note: the service types still declare `Promise<Result>`; with
+   * `returning: false` a single mutation resolves to `undefined`.
+   *
+   * @default true
+   */
+  returning?: boolean
 }
 
 /**
