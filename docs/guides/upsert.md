@@ -41,9 +41,12 @@ All options live under `params.kysely`:
 | `onConflictMergeFields`   | `string[]` | —          | Specific fields to update on conflict        |
 | `onConflictExcludeFields` | `string[]` | —          | Fields to exclude from update                |
 | `onConflictReturning`     | `string`   | `'all'`    | `'all'`, `'written'`, `'changed'` or `'none'` |
+| `returning`               | `boolean`  | `true`     | `false` skips `RETURNING` and every post-fetch — see [Skipping the return value](../api/service#skipping-the-return-value) |
 
 Conflict handling only kicks in when `onConflictFields` is set. Without it,
-`create` is a plain insert and `onConflictReturning` is ignored as well.
+`create` is a plain insert and `onConflictReturning` is ignored as well. The
+cross-cutting [`returning`](../api/service#skipping-the-return-value) option
+applies either way, and takes precedence over `onConflictReturning`.
 
 ### Merge vs Ignore
 

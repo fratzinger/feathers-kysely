@@ -1213,6 +1213,31 @@ export class KyselyAdapter<
       : q
   }
 
+  /**
+   * Whether the caller opted out of a return value via
+   * `params.kysely.returning === false`. See {@link KyselyParams.returning}.
+   */
+  private wantsNoReturn(params: ServiceParams): boolean {
+    return (params as KyselyAdapterParams).kysely?.returning === false
+  }
+
+  /**
+   * Did an INSERT/UPDATE/DELETE executed without RETURNING touch at least one
+   * row? Reads the driver's affected-row count (`numUpdatedRows`,
+   * `numDeletedRows`, `numAffectedRows`, `numInsertedOrUpdatedRows`) so a single
+   * mutation with `returning: false` can still throw `NotFound` when it matched
+   * nothing. Not used on MySQL, which verifies existence via a pre-fetch.
+   */
+  private didAffectRow(result: any): boolean {
+    if (!result) return false
+    const count =
+      result.numUpdatedRows ??
+      result.numDeletedRows ??
+      result.numAffectedRows ??
+      result.numInsertedOrUpdatedRows
+    return count != null && Number(count) > 0
+  }
+
   private convertValues<T>(data: T): T {
     if (this.options.dialectType !== 'sqlite') {
       return data
@@ -1686,10 +1711,16 @@ export class KyselyAdapter<
       onConflictMergeFields,
       onConflictExcludeFields = [],
       onConflictReturning = 'all',
+      returning: wantReturn = true,
     } = (params as { kysely?: KyselyParams<Result> }).kysely ?? {}
 
     const hasConflictHandling = onConflictFields.length > 0
-    const returningMode = hasConflictHandling ? onConflictReturning : 'all'
+    // `returning: false` forces the no-return path, overriding onConflictReturning.
+    const returningMode = !wantReturn
+      ? 'none'
+      : hasConflictHandling
+        ? onConflictReturning
+        : 'all'
 
     // With 'ignore' (or a merge with zero fields to update) a conflicting row
     // is not written, so RETURNING omits it.
@@ -1983,15 +2014,20 @@ export class KyselyAdapter<
     id: NullableId,
     params: ServiceParams,
     $select?: string[] | undefined,
+    applyReturningClause = true,
   ) {
     const { filters, options, query } = this.filterQuery(params, id)
     const { id: idField, dialectType } = options
 
     if (dialectType !== 'mysql') {
       const withWhere = this.applyWhere(q, query)
-      const returning = this.applyReturning(withWhere, filters.$select)
+      // Skip RETURNING entirely for fire-and-forget writes — the affected-row
+      // count on the plain result is enough to enforce NotFound on a single call.
+      const q2 = applyReturningClause
+        ? this.applyReturning(withWhere, filters.$select)
+        : withWhere
       const result = {
-        q: returning,
+        q: q2,
         buildWhere: undefined,
         items: undefined,
       }
@@ -2086,12 +2122,26 @@ export class KyselyAdapter<
 
     const { filters, options } = this.filterQuery(params, id)
 
-    const { id: idField, name } = this.options
+    const { id: idField, name, dialectType } = this.options
+
+    const noReturn = this.wantsNoReturn(params)
 
     const data = this.convertValues(_data)
     const setData = _.omit(data, idField)
 
     if (Object.keys(setData).length === 0) {
+      if (noReturn) {
+        // No-op patch: there is no SET clause, so no UPDATE runs on ANY dialect
+        // and no affected-row count exists to derive existence from. Enforce
+        // NotFound for a single id with a minimal id-only existence probe.
+        if (!asMulti) {
+          await this._get(id as Id, {
+            ...params,
+            query: { ...params.query, $select: [idField] },
+          })
+        }
+        return (asMulti ? [] : undefined) as unknown as Result | Result[]
+      }
       return asMulti
         ? await this._find({ ...params, paginate: false })
         : await this._get(id as Id, params)
@@ -2104,10 +2154,26 @@ export class KyselyAdapter<
       id,
       params,
       [this.options.id],
+      !noReturn,
     )
 
     if (!q) {
       return [] // nothing to patch
+    }
+
+    if (noReturn) {
+      // Skip RETURNING and every post-fetch. On MySQL, getWhereForUpdateOrDelete
+      // already pre-fetched (and threw NotFound for a missing single id); on
+      // other dialects we derive existence from the affected-row count.
+      const execResult = await (
+        asMulti ? (q as any).execute() : (q as any).executeTakeFirst()
+      ).catch(this.handleError)
+
+      if (!asMulti && dialectType !== 'mysql' && !this.didAffectRow(execResult)) {
+        throw new NotFound(`No record found for ${idField} '${id}'`)
+      }
+
+      return (asMulti ? [] : undefined) as unknown as Result | Result[]
     }
 
     const response = await this.executeAndReturn(q, {
@@ -2189,6 +2255,7 @@ export class KyselyAdapter<
     }
 
     const isMulti = id === null
+    const noReturn = this.wantsNoReturn(params)
 
     const deleteFrom = this.db(params).deleteFrom(this.options.name)
 
@@ -2196,10 +2263,31 @@ export class KyselyAdapter<
       deleteFrom,
       id,
       params,
+      undefined,
+      !noReturn,
     )
 
     if (!q) {
       return isMulti ? [] : Promise.reject(new NotFound())
+    }
+
+    if (noReturn) {
+      // Skip RETURNING and the deleted-row payload. On MySQL a missing single id
+      // already threw NotFound in getWhereForUpdateOrDelete; on other dialects we
+      // derive existence from the affected-row count.
+      const execResult = await (q as any)
+        .executeTakeFirst()
+        .catch(this.handleError)
+
+      if (
+        !isMulti &&
+        this.options.dialectType !== 'mysql' &&
+        !this.didAffectRow(execResult)
+      ) {
+        throw new NotFound()
+      }
+
+      return (isMulti ? [] : undefined) as unknown as Result | Result[]
     }
 
     const _result = await q.execute().catch(this.handleError)
