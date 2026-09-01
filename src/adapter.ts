@@ -519,10 +519,18 @@ export class KyselyAdapter<
       currentRelations = this.lookupRelationsForService(relation.service)
     }
 
+    const columnName = parts[parts.length - 1]
+
+    // The last segment has to be a column. When it names a relation of the
+    // service we arrived at (`user.todos`, `user.manager`), the path points at
+    // a relation, not a column — resolving it here would emit `"user"."todos"`
+    // as a column ref. Report it as unresolved instead.
+    if (currentRelations?.[columnName]) return null
+
     return {
       steps,
       columnAlias: currentAlias,
-      columnName: parts[parts.length - 1],
+      columnName,
       isSimpleColumn: false,
     }
   }
@@ -931,6 +939,19 @@ export class KyselyAdapter<
         return eb.and(qs)
       }
 
+      // An operator-only object that produced no condition is unresolvable —
+      // e.g. a collection operator (`{ $some: ... }`) on a key that is not a
+      // hasMany relation, or a property-level `$not`. Falling through to the
+      // equality branch would compare the column against the raw object and
+      // emit invalid SQL, so drop the condition instead.
+      const operatorKeys = Object.keys(queryProperty as Record<string, any>)
+      if (
+        operatorKeys.length > 0 &&
+        operatorKeys.every((key) => key.startsWith('$'))
+      ) {
+        return
+      }
+
       // no operators matched - fall through to simple equality check
     }
 
@@ -1066,11 +1087,34 @@ export class KyselyAdapter<
       return undefined
     }
 
-    const hasMany = this.handleHasMany(eb, queryKey, queryProperty)
+    // A `$`-prefixed key is an operator, never a column. `$and`/`$or`/`$not`
+    // are handled in handleQueryPropertyNormal; anything else reaching here is
+    // unresolvable — e.g. a collection operator on a belongsTo relation, which
+    // would otherwise be qualified into a column ref like `"user"."$some"`.
+    if (
+      queryKey.startsWith('$') &&
+      queryKey !== '$and' &&
+      queryKey !== '$or' &&
+      queryKey !== '$not'
+    ) {
+      return undefined
+    }
+
+    // Inside a related-table scope (a hasMany EXISTS subquery, or a nested
+    // belongsTo object) the relation handlers resolve paths against *this*
+    // service's relations and against the outer FROM clause. Applying them
+    // there emits refs to tables the (sub)query never joined.
+    const inRelationScope = !!options?.tableName
+
+    const hasMany = inRelationScope
+      ? undefined
+      : this.handleHasMany(eb, queryKey, queryProperty)
 
     if (hasMany) return hasMany
 
-    const belongsTo = this.handleBelongsTo(eb, queryKey, queryProperty)
+    const belongsTo = inRelationScope
+      ? undefined
+      : this.handleBelongsTo(eb, queryKey, queryProperty)
 
     if (belongsTo) return belongsTo
 
@@ -1090,6 +1134,11 @@ export class KyselyAdapter<
     // left alone — they may be legitimate qualified refs like
     // `alias.column` added by addToQuery null-protect on a prior hop.
     if (queryKey.includes('.')) {
+      // In a related-table scope a dot-path is neither a JSON access (handled
+      // above) nor something `col()` can qualify — `col('a.b', { tableName })`
+      // would build a three-part ref. Drop it.
+      if (inRelationScope) return undefined
+
       const parts = queryKey.split('.')
       if (parts.length > 2) return undefined
       if (this.options.relations?.[parts[0]]) return undefined

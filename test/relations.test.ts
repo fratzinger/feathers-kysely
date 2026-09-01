@@ -468,35 +468,16 @@ describe('relations', () => {
       { text: 'Todo 2', userId: users[1].id },
     ])
 
-    // `user` is a belongsTo relation (asArray: false)
-    // $some is a collection operator only for hasMany — on belongsTo it falls
-    // through to handleQueryPropertyNormal where it's treated as a column name
-    try {
-      await app.service('todos').find({
-        query: { user: { $some: { name: 'Alice' } } },
-        paginate: false,
-      })
-      // If no error, the operator was silently ignored
-    } catch {
-      // Error is expected — $some is not a valid column on the joined table
-    }
-
-    try {
-      await app.service('todos').find({
-        query: { user: { $none: {} } },
-        paginate: false,
-      })
-    } catch {
-      // Error is expected
-    }
-
-    try {
-      await app.service('todos').find({
-        query: { user: { $every: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error is expected
+    // `user` is a belongsTo relation (asArray: false). Collection operators only
+    // apply to hasMany — here they must be dropped, never compared against a
+    // column (which would emit `"user"."$some" = ?` and fail).
+    for (const query of [
+      { user: { $some: { name: 'Alice' } } },
+      { user: { $none: {} } },
+      { user: { $every: { name: 'Alice' } } },
+    ]) {
+      const result = await app.service('todos').find({ query, paginate: false })
+      assert.strictEqual(result.length, 2)
     }
   })
 
@@ -508,32 +489,15 @@ describe('relations', () => {
       { name: 'Bob', age: 25 },
     ])
 
-    // `nonExistent` is not a defined relation
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $some: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored — both acceptable
-    }
-
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $none: {} } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored
-    }
-
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $every: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored
+    // `nonExistent` is not a defined relation — the filter is dropped instead of
+    // being compared against a column of that name.
+    for (const query of [
+      { nonExistent: { $some: { name: 'Alice' } } },
+      { nonExistent: { $none: {} } },
+      { nonExistent: { $every: { name: 'Alice' } } },
+    ]) {
+      const result = await app.service('users').find({ query, paginate: false })
+      assert.strictEqual(result.length, 2)
     }
   })
 
@@ -849,6 +813,45 @@ describe('relations', () => {
     assert.strictEqual(result.length, 2)
   })
 
+  it('hasMany behind a belongsTo hop is skipped, not leaked into SQL', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app
+      .service('users')
+      .create({ name: 'Bob', managerId: alice.id })
+
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: alice.id },
+      { text: 'Bob todo', userId: bob.id },
+    ])
+
+    // `user` (belongsTo) → `reports` (hasMany) is not resolvable yet. It must be
+    // dropped rather than emitted as `"user"."reports" = '{"$some":...}'`.
+    for (const query of [
+      { user: { reports: { $some: { name: 'Bob' } } } },
+      { 'user.reports': { $some: { name: 'Bob' } } },
+    ]) {
+      const result = await app.service('todos').find({ query, paginate: false })
+      assert.strictEqual(result.length, 2)
+    }
+  })
+
+  it('relation path inside $some is skipped, not leaked into SQL', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    await app
+      .service('users')
+      .create([{ name: 'Bob', managerId: alice.id }, { name: 'Carol' }])
+
+    // `manager.name` inside the subquery references a table the EXISTS never
+    // joined — it must be dropped instead of emitted as `"manager"."name" = ?`.
+    const result = await app.service('users').find({
+      query: { reports: { $some: { 'manager.name': 'Alice' } } },
+      paginate: false,
+    })
+    // filter inside $some dropped → every user with at least one report
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+  })
+
   it('unresolvable 3-level path inside $or does not leak raw column refs', async () => {
     const users = await app
       .service('users')
@@ -1070,7 +1073,9 @@ describe('relations', () => {
     // With filter assigneeId=1: Alice MIN='Z-task' > Bob MIN='B-task' → Bob first
     const withFilter = await app.service('users').find({
       query: {
-        $sort: { 'todos.text': { direction: 1, filter: { assigneeId: 1 } } } as any,
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: 1 } },
+        } as any,
       },
       paginate: false,
     })
