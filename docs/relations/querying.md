@@ -132,4 +132,16 @@ await app.service("users").find({
 
 - **`app.setup()` must have run** for any chain longer than one hop — the adapter resolves each hop through `app.service(name)`. See [Setup → App Setup](./setup#app-setup).
 - **JSON column traversal is not available inside `$some` / `$none` / `$every`** — column types are read from the queried service's own `properties`, so a dot path in a sub-filter is treated as a relation path, not as JSON access.
-- **Unresolvable paths are dropped**, never turned into SQL. A typo in a relation or column name silently widens the result set instead of throwing.
+
+## Errors
+
+A filter that cannot be resolved is rejected with a `BadRequest` instead of being dropped. A dropped filter widens the result set, which is how an authorization filter turns into a data leak — so anything the adapter can prove is wrong fails loudly:
+
+- a collection operator (`$some` / `$none` / `$every`) on a belongsTo relation, on a plain column, or on an unknown key
+- a path that starts at a declared relation but breaks further along — `'user.bogus.name'`, or a hop whose target service is missing, is not a `KyselyService`, or is unreachable because `app.setup()` never ran
+- a dot path inside `$some` / `$none` / `$every` that is neither a relation of the related service nor one of its own columns
+
+Two cases stay quiet, because the adapter cannot prove they are wrong:
+
+- a dot path whose **first** segment is not a declared relation — indistinguishable from an already-qualified column ref or a JSON access. An unknown column there surfaces as a database error.
+- an empty condition object (`{ user: {} }`), which is a no-op, like `$not: {}`

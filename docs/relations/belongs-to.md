@@ -112,4 +112,4 @@ Paths that share a prefix deduplicate their JOINs — `'assignment.customer.full
 - **`app.setup()` must have run** — the adapter needs the Feathers app to look up related services. See [Setup → App Setup](./setup#app-setup).
 - **hasMany hops open a subquery** — a chain may pass through hasMany relations (e.g. `'user.todos.text'`); each one becomes an `EXISTS` subquery instead of a JOIN. See [Querying Relations → Mixed chains](./querying#mixed-chains).
 - **Same-adapter services** — the related service must also be a `KyselyService`. Paths through foreign adapters are silently skipped.
-- **Broken paths are silent** — if any segment doesn't resolve (unknown relation, typo), the filter is ignored rather than throwing. Double-check your relation definitions if a query returns unexpected rows.
+- **Broken paths throw** — if a path starts at a declared relation but any later segment doesn't resolve (typo, missing `app.setup()`, non-Kysely service), the query is rejected with a `BadRequest` rather than silently dropping the filter. See [Querying Relations → Errors](./querying#errors).

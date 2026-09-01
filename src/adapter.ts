@@ -423,6 +423,25 @@ export class KyselyAdapter<
     }
   }
 
+  /** Collection operator keys present on a query property, if it is an object. */
+  private collectionOperatorsIn(value: any): string[] {
+    if (!_.isObject(value) || Array.isArray(value)) return []
+    return Object.keys(value).filter((key) =>
+      KyselyAdapter.COLLECTION_OPERATORS.includes(
+        key as (typeof KyselyAdapter.COLLECTION_OPERATORS)[number],
+      ),
+    )
+  }
+
+  /** An empty condition object is a no-op, like `$not: {}` — never an error. */
+  private isEmptyConditionObject(value: any): boolean {
+    return (
+      _.isObject(value) &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 0
+    )
+  }
+
   private isPlainRelationObject(value: any): boolean {
     if (!value || typeof value !== 'object' || Array.isArray(value))
       return false
@@ -822,7 +841,38 @@ export class KyselyAdapter<
     }
 
     const target = this.walkRelationPath(parts, scope)
-    if (!target) return
+
+    // A collection operator is only meaningful on a hasMany relation. Anywhere
+    // else it is a client error — dropping it silently would widen the result
+    // set, which is exactly how an authorization filter turns into a leak.
+    const collectionOperators = this.collectionOperatorsIn(queryProperty)
+    if (
+      collectionOperators.length &&
+      (!target || target.kind !== 'hasMany' || target.rest.length > 0)
+    ) {
+      throw new BadRequest(
+        `Invalid query: '${collectionOperators[0]}' is only valid on a hasMany relation, but '${queryKey}' is not one`,
+        { [queryKey]: collectionOperators },
+      )
+    }
+
+    if (!target) {
+      // A path that starts at a declared relation but does not resolve is a
+      // broken chain (typo, missing `app.setup()`, non-Kysely service). Keys
+      // that do not start at a relation are left to the caller — they may be a
+      // plain column or an already-qualified ref.
+      if (
+        scope.relations[parts[0]] &&
+        !this.isEmptyConditionObject(queryProperty)
+      ) {
+        throw new BadRequest(
+          `Invalid query: '${queryKey}' does not resolve to a column through the relations of '${scope.alias}'`,
+          { [queryKey]: queryProperty },
+        )
+      }
+
+      return
+    }
 
     if (target.kind === 'column') {
       // No hops — a plain column, which the caller handles.
@@ -1215,12 +1265,16 @@ export class KyselyAdapter<
       if (scope) {
         // Inside a subquery only aliases derived from its own scope are in the
         // FROM clause; any other qualified ref would point at a table it never
-        // joined.
+        // joined. JSON traversal is not available here either, so there is no
+        // reading under which such a path is valid.
         if (
           parts[0] !== scope.alias &&
           !parts[0].startsWith(`${scope.alias}__`)
         ) {
-          return undefined
+          throw new BadRequest(
+            `Invalid query: '${queryKey}' does not resolve to a column or relation of '${scope.alias}'`,
+            { [queryKey]: queryProperty },
+          )
         }
 
         return this.handleQueryPropertyNormal(eb, queryKey, queryProperty, {
@@ -2303,7 +2357,11 @@ export class KyselyAdapter<
         asMulti ? (q as any).execute() : (q as any).executeTakeFirst()
       ).catch(this.handleError)
 
-      if (!asMulti && dialectType !== 'mysql' && !this.didAffectRow(execResult)) {
+      if (
+        !asMulti &&
+        dialectType !== 'mysql' &&
+        !this.didAffectRow(execResult)
+      ) {
         throw new NotFound(`No record found for ${idField} '${id}'`)
       }
 

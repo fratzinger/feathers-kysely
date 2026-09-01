@@ -457,7 +457,7 @@ describe('relations', () => {
 
   // MARK: $some/$none/$every on belongsTo relations
 
-  it('$some/$none/$every on belongsTo relation are not applied', async () => {
+  it('$some/$none/$every on a belongsTo relation throw', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
@@ -468,36 +468,45 @@ describe('relations', () => {
       { text: 'Todo 2', userId: users[1].id },
     ])
 
-    // `user` is a belongsTo relation (asArray: false). Collection operators only
-    // apply to hasMany — here they must be dropped, never compared against a
-    // column (which would emit `"user"."$some" = ?` and fail).
+    // `user` is a belongsTo relation (asArray: false) — a collection operator
+    // cannot apply to it. Dropping it silently would widen the result set.
     for (const query of [
       { user: { $some: { name: 'Alice' } } },
       { user: { $none: {} } },
       { user: { $every: { name: 'Alice' } } },
     ]) {
-      const result = await app.service('todos').find({ query, paginate: false })
-      assert.strictEqual(result.length, 2)
+      await assert.rejects(
+        () => app.service('todos').find({ query, paginate: false }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          assert.match(error.message, /only valid on a hasMany relation/)
+          return true
+        },
+      )
     }
   })
 
   // MARK: $some/$none/$every on non-existent relations
 
-  it('$some/$none/$every on non-existent relation are not applied', async () => {
+  it('$some/$none/$every on a non-existent relation throw', async () => {
     await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
     ])
 
-    // `nonExistent` is not a defined relation — the filter is dropped instead of
-    // being compared against a column of that name.
+    // `nonExistent` is not a defined relation
     for (const query of [
       { nonExistent: { $some: { name: 'Alice' } } },
       { nonExistent: { $none: {} } },
       { nonExistent: { $every: { name: 'Alice' } } },
     ]) {
-      const result = await app.service('users').find({ query, paginate: false })
-      assert.strictEqual(result.length, 2)
+      await assert.rejects(
+        () => app.service('users').find({ query, paginate: false }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          return true
+        },
+      )
     }
   })
 
@@ -783,16 +792,24 @@ describe('relations', () => {
     assert.strictEqual(result[0].text, 'Alice todo')
   })
 
-  it('3-level path with unknown middle segment is silently ignored', async () => {
+  it('3-level path with unknown middle segment throws', async () => {
     await app.service('users').create([{ name: 'Alice' }, { name: 'Bob' }])
     await app.service('todos').create({ text: 'Todo 1', userId: 1 })
 
-    const result = await app.service('todos').find({
-      query: { 'user.bogus.name': 'Alice' },
-      paginate: false,
-    })
-    // Unknown middle segment → resolver returns null, filter is skipped
-    assert.strictEqual(result.length, 1)
+    // The path starts at a declared relation but breaks further along — a
+    // broken chain, not a column.
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { 'user.bogus.name': 'Alice' },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /does not resolve to a column/)
+        return true
+      },
+    )
   })
 
   // MARK: relation chains through hasMany
@@ -930,19 +947,24 @@ describe('relations', () => {
     )
   })
 
-  it('broken relation chain past a hasMany hop is skipped', async () => {
+  it('broken relation chain past a hasMany hop throws', async () => {
     await seedChain()
 
-    // `bogus` is not a relation or column of the related service
-    const result = await app.service('users').find({
-      query: { 'todos.bogus.name': 'Alice' },
-      paginate: false,
-    })
-
-    assert.strictEqual(result.length, 3)
+    // `bogus` is neither a relation nor a resolvable ref inside the subquery
+    await assert.rejects(
+      () =>
+        app.service('users').find({
+          query: { 'todos.bogus.name': 'Alice' },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        return true
+      },
+    )
   })
 
-  it('unresolvable 3-level path inside $or does not leak raw column refs', async () => {
+  it('unresolvable 3-level path inside $or throws', async () => {
     const users = await app
       .service('users')
       .create([{ name: 'Alice' }, { name: 'Bob' }])
@@ -951,19 +973,25 @@ describe('relations', () => {
       { text: 'Bob todo', userId: users[1].id },
     ])
 
-    // Both legs of the $or reference a path that cannot be resolved.
-    // Neither must leak into SQL as "a"."b"."c" — otherwise Postgres raises
-    // "missing FROM-clause entry for table ...".
-    const result = await app.service('todos').find({
-      query: {
-        $or: [
-          { 'user.bogus.name': { $iLike: '%Alice%' } },
-          { 'user.bogus.age': { $gt: 0 } },
-        ],
+    // Both legs reference a path that cannot be resolved. Neither may leak
+    // into SQL as "a"."b"."c", and neither may be silently dropped — an $or
+    // whose legs vanish matches every row.
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: {
+            $or: [
+              { 'user.bogus.name': { $iLike: '%Alice%' } },
+              { 'user.bogus.age': { $gt: 0 } },
+            ],
+          },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        return true
       },
-      paginate: false,
-    })
-    assert.strictEqual(result.length, 2)
+    )
   })
 
   it("sort by relation's column", async () => {
