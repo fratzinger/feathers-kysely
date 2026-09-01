@@ -25,7 +25,7 @@ In this example, each user can have many todos.
 
 ## Querying
 
-hasMany relations support the `$some`, `$none`, and `$every` operators. See [Querying Relations](./querying) for details.
+hasMany relations support the `$some`, `$none`, and `$every` operators. They can appear at any depth of a relation chain, and their sub-filter may itself reference the related service's relations. See [Querying Relations](./querying) for details.
 
 ## Sorting
 

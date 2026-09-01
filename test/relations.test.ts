@@ -795,61 +795,151 @@ describe('relations', () => {
     assert.strictEqual(result.length, 1)
   })
 
-  it('3-level path through hasMany is silently skipped', async () => {
-    const users = await app
-      .service('users')
-      .create([{ name: 'Alice' }, { name: 'Bob' }])
+  // MARK: relation chains through hasMany
 
-    await app.service('todos').create([
-      { text: 'Alice todo', userId: users[0].id },
-      { text: 'Bob todo', userId: users[1].id },
-    ])
-
-    const result = await app.service('users').find({
-      query: { 'todos.user.name': 'Alice' },
-      paginate: false,
-    })
-    // hasMany in the middle of a path is out of scope → filter ignored
-    assert.strictEqual(result.length, 2)
-  })
-
-  it('hasMany behind a belongsTo hop is skipped, not leaked into SQL', async () => {
+  /**
+   * Alice ← Bob ← Carol (manager chain), one todo per user.
+   * Alice.reports = [Bob], Bob.reports = [Carol], Carol.reports = [].
+   * The orphan todo has no user at all, so it also covers the LEFT JOIN
+   * null-protect on a belongsTo hop.
+   */
+  const seedChain = async () => {
     const alice = await app.service('users').create({ name: 'Alice' })
     const bob = await app
       .service('users')
       .create({ name: 'Bob', managerId: alice.id })
+    const carol = await app
+      .service('users')
+      .create({ name: 'Carol', managerId: bob.id })
 
-    await app.service('todos').create([
-      { text: 'Alice todo', userId: alice.id },
+    const todos = await app.service('todos').create([
+      { text: 'Alice todo', userId: alice.id, assigneeId: carol.id },
       { text: 'Bob todo', userId: bob.id },
+      { text: 'Carol todo', userId: carol.id },
+      { text: 'Orphan todo', userId: 9999 },
     ])
 
-    // `user` (belongsTo) → `reports` (hasMany) is not resolvable yet. It must be
-    // dropped rather than emitted as `"user"."reports" = '{"$some":...}'`.
+    return { alice, bob, carol, todos }
+  }
+
+  it('3-level path through hasMany filters via EXISTS', async () => {
+    await seedChain()
+
+    // users who have at least one todo whose owner is Alice
+    const result = await app.service('users').find({
+      query: { 'todos.user.name': 'Alice' },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+  })
+
+  it('hasMany behind a belongsTo hop ($some, both notations)', async () => {
+    await seedChain()
+
+    // todos whose owner has a direct report named Carol → Bob's todo
     for (const query of [
-      { user: { reports: { $some: { name: 'Bob' } } } },
-      { 'user.reports': { $some: { name: 'Bob' } } },
+      { user: { reports: { $some: { name: 'Carol' } } } },
+      { 'user.reports': { $some: { name: 'Carol' } } },
+      { 'user.reports.name': 'Carol' },
     ]) {
       const result = await app.service('todos').find({ query, paginate: false })
-      assert.strictEqual(result.length, 2)
+      assert.strictEqual(result.length, 1)
+      assert.strictEqual(result[0].text, 'Bob todo')
     }
   })
 
-  it('relation path inside $some is skipped, not leaked into SQL', async () => {
-    const alice = await app.service('users').create({ name: 'Alice' })
-    await app
-      .service('users')
-      .create([{ name: 'Bob', managerId: alice.id }, { name: 'Carol' }])
+  it('hasMany behind a belongsTo hop ($none) excludes rows without a parent', async () => {
+    await seedChain()
 
-    // `manager.name` inside the subquery references a table the EXISTS never
-    // joined — it must be dropped instead of emitted as `"manager"."name" = ?`.
+    // todos whose owner has no reports → Carol's todo. The orphan todo must not
+    // slip through: its LEFT JOIN'd user is NULL, so NOT EXISTS would be
+    // vacuously true without the null-protect on the hop.
+    const result = await app.service('todos').find({
+      query: { user: { reports: { $none: {} } } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Carol todo')
+  })
+
+  it('belongsTo inside $some joins within the subquery', async () => {
+    await seedChain()
+
+    // users owning at least one todo that is assigned to Carol → Alice
+    for (const query of [
+      { todos: { $some: { assignee: { name: 'Carol' } } } },
+      { todos: { $some: { 'assignee.name': 'Carol' } } },
+      { 'todos.assignee.name': 'Carol' },
+    ]) {
+      const result = await app.service('users').find({ query, paginate: false })
+      assert.strictEqual(result.length, 1)
+      assert.strictEqual(result[0].name, 'Alice')
+    }
+  })
+
+  it('nested hasMany inside $some does not shadow the outer alias', async () => {
+    await seedChain()
+
+    // users with a report that itself has a report named Carol → Alice
+    const result = await app.service('users').find({
+      query: { reports: { $some: { reports: { $some: { name: 'Carol' } } } } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+  })
+
+  it('self-referencing belongsTo inside $some resolves in the child scope', async () => {
+    await seedChain()
+
+    // users with a report whose manager is Alice → Alice herself
     const result = await app.service('users').find({
       query: { reports: { $some: { 'manager.name': 'Alice' } } },
       paginate: false,
     })
-    // filter inside $some dropped → every user with at least one report
+
     assert.strictEqual(result.length, 1)
     assert.strictEqual(result[0].name, 'Alice')
+
+    // Bob's reports are managed by Bob, not Alice → no match for Bob
+    const none = await app.service('users').find({
+      query: { reports: { $some: { 'manager.name': 'Nobody' } } },
+      paginate: false,
+    })
+    assert.strictEqual(none.length, 0)
+  })
+
+  it('relation chain combined with $or and a regular filter', async () => {
+    await seedChain()
+
+    const result = await app.service('todos').find({
+      query: {
+        $or: [{ 'user.reports.name': 'Carol' }, { text: 'Orphan todo' }],
+        $sort: { text: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Bob todo', 'Orphan todo'],
+    )
+  })
+
+  it('broken relation chain past a hasMany hop is skipped', async () => {
+    await seedChain()
+
+    // `bogus` is not a relation or column of the related service
+    const result = await app.service('users').find({
+      query: { 'todos.bogus.name': 'Alice' },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 3)
   })
 
   it('unresolvable 3-level path inside $or does not leak raw column refs', async () => {

@@ -104,7 +104,51 @@ type Filters = {
 
 type HandleQueryOptions = {
   tableName?: string | null | undefined
+  /**
+   * The row source query keys are resolved against. Absent means the service's
+   * own table; set for the sub-filter of a hasMany `EXISTS` subquery.
+   */
+  scope?: RelationScope
 }
+
+/**
+ * The row source a query key is resolved against: the alias its unqualified
+ * columns belong to, plus the relations of the service that owns it.
+ */
+type RelationScope = {
+  alias: string
+  relations: Record<string, Relation> | undefined
+}
+
+type JoinStep = {
+  relation: Relation
+  alias: string
+  sourceAlias: string
+  databaseTableName: string
+  sourceKey: string
+  targetKey: string
+}
+
+/** What a dot-path points at, as resolved by `walkRelationPath`. */
+type RelationPathTarget =
+  | {
+      kind: 'column'
+      /** belongsTo hops to join before the column can be referenced */
+      steps: JoinStep[]
+      columnAlias: string
+      columnName: string
+    }
+  | {
+      kind: 'hasMany'
+      /** belongsTo hops to join before the subquery can correlate */
+      steps: JoinStep[]
+      /** alias the `EXISTS` correlates to */
+      sourceAlias: string
+      relationKey: string
+      relation: Relation
+      /** path left to resolve inside the related service's scope */
+      rest: string[]
+    }
 
 export class KyselyAdapter<
   Result extends Record<string, any>,
@@ -363,6 +407,10 @@ export class KyselyAdapter<
     return { q, query }
   }
 
+  private rootScope(): RelationScope {
+    return { alias: this.options.name, relations: this.options.relations }
+  }
+
   private lookupRelationsForService(
     serviceName: string,
   ): Record<string, Relation> | undefined {
@@ -386,8 +434,11 @@ export class KyselyAdapter<
     return true
   }
 
-  private flattenRelationQuery(query: Query): Query {
-    if (!this.options.relations || !query) return query
+  private flattenRelationQuery(
+    query: Query,
+    relations: Record<string, Relation> | undefined = this.options.relations,
+  ): Query {
+    if (!relations || !query) return query
 
     const out: Record<string, any> = {}
 
@@ -401,14 +452,16 @@ export class KyselyAdapter<
 
       if (key === '$and' || key === '$or') {
         if (Array.isArray(value)) {
-          out[key] = value.map((sub) => this.flattenRelationQuery(sub))
+          out[key] = value.map((sub) =>
+            this.flattenRelationQuery(sub, relations),
+          )
         } else {
           out[key] = value
         }
         continue
       }
 
-      const relation = this.options.relations[key]
+      const relation = relations[key]
       if (relation && !relation.asArray && this.isPlainRelationObject(value)) {
         this.flattenBelongsToInto(
           value,
@@ -451,49 +504,47 @@ export class KyselyAdapter<
     }
   }
 
-  private resolveRelationPath(parts: string[]): {
-    steps: Array<{
-      relation: Relation
-      alias: string
-      sourceAlias: string
-      databaseTableName: string
-      sourceKey: string
-      targetKey: string
-    }>
-    columnAlias: string
-    columnName: string
-    isSimpleColumn: boolean
-  } | null {
+  /**
+   * Walk a dot-path from `scope` and report what it points at: a column on the
+   * current row source (after zero or more belongsTo hops), or the first
+   * hasMany hop, which needs an `EXISTS` subquery and carries the rest of the
+   * path to resolve inside it. Returns `null` when the path is not resolvable
+   * (unknown segment, incomplete relation, or a path ending on a belongsTo
+   * relation, which references a relation and not a column).
+   */
+  private walkRelationPath(
+    parts: string[],
+    scope: RelationScope,
+  ): RelationPathTarget | null {
     if (!parts.length) return null
-    if (parts.length === 1) {
-      return {
-        steps: [],
-        columnAlias: this.options.name,
-        columnName: parts[0],
-        isSimpleColumn: true,
-      }
-    }
 
-    const steps: Array<{
-      relation: Relation
-      alias: string
-      sourceAlias: string
-      databaseTableName: string
-      sourceKey: string
-      targetKey: string
-    }> = []
+    const steps: JoinStep[] = []
+    let currentRelations = scope.relations
+    let currentAlias = scope.alias
+    // Alias chains are namespaced by the scope they were built in, so a
+    // subquery never shadows an alias of the query it is correlated to.
+    const aliasChain: string[] =
+      scope.alias === this.options.name ? [] : [scope.alias]
 
-    let currentRelations = this.options.relations
-    let currentAlias = this.options.name
-    const aliasChain: string[] = []
-
-    for (let i = 0; i < parts.length - 1; i++) {
+    for (let i = 0; i < parts.length; i++) {
       const key = parts[i]
+      const isLast = i === parts.length - 1
       const relation = currentRelations?.[key]
 
+      if (!relation) {
+        // Only the last segment may be a column; anything earlier has to be a
+        // relation for the path to resolve.
+        if (!isLast) return null
+
+        return {
+          kind: 'column',
+          steps,
+          columnAlias: currentAlias,
+          columnName: key,
+        }
+      }
+
       if (
-        !relation ||
-        relation.asArray ||
         !relation.databaseTableName ||
         !relation.keyHere ||
         !relation.keyThere
@@ -501,10 +552,26 @@ export class KyselyAdapter<
         return null
       }
 
+      if (relation.asArray) {
+        return {
+          kind: 'hasMany',
+          steps,
+          sourceAlias: currentAlias,
+          relationKey: key,
+          relation,
+          rest: parts.slice(i + 1),
+        }
+      }
+
+      // A path ending on a belongsTo relation points at a relation, not a
+      // column — `{ user: {...} }` is normalized into dot-paths before it gets
+      // here, so anything left is unresolvable.
+      if (isLast) return null
+
       aliasChain.push(key)
       const alias = aliasChain.join('__')
 
-      if (steps.some((s) => s.alias === alias)) return null
+      if (steps.some((step) => step.alias === alias)) return null
 
       steps.push({
         relation,
@@ -519,19 +586,44 @@ export class KyselyAdapter<
       currentRelations = this.lookupRelationsForService(relation.service)
     }
 
-    const columnName = parts[parts.length - 1]
+    return null
+  }
 
-    // The last segment has to be a column. When it names a relation of the
-    // service we arrived at (`user.todos`, `user.manager`), the path points at
-    // a relation, not a column — resolving it here would emit `"user"."todos"`
-    // as a column ref. Report it as unresolved instead.
-    if (currentRelations?.[columnName]) return null
+  /**
+   * Resolve a dot-path to a (joined) column. Used by the JOIN passes and by
+   * `$sort`, which can only order by a column — a path through a hasMany or one
+   * ending on a relation resolves to `null` here.
+   */
+  private resolveRelationPath(
+    parts: string[],
+    scope?: RelationScope,
+  ): {
+    steps: JoinStep[]
+    columnAlias: string
+    columnName: string
+    isSimpleColumn: boolean
+  } | null {
+    if (!parts.length) return null
+
+    const currentScope = scope ?? this.rootScope()
+
+    if (parts.length === 1) {
+      return {
+        steps: [],
+        columnAlias: currentScope.alias,
+        columnName: parts[0],
+        isSimpleColumn: true,
+      }
+    }
+
+    const target = this.walkRelationPath(parts, currentScope)
+    if (!target || target.kind !== 'column') return null
 
     return {
-      steps,
-      columnAlias: currentAlias,
-      columnName,
-      isSimpleColumn: false,
+      steps: target.steps,
+      columnAlias: target.columnAlias,
+      columnName: target.columnName,
+      isSimpleColumn: target.steps.length === 0,
     }
   }
 
@@ -540,9 +632,11 @@ export class KyselyAdapter<
     query: Query,
     options: {
       alreadyJoined: string[]
+      scope?: RelationScope
     },
   ): { q: Q; query: Query } {
-    if (!this.options.relations) return { q, query }
+    const scope = options.scope ?? this.rootScope()
+    if (!scope.relations) return { q, query }
 
     for (const key in query) {
       if (FILTERS.has(key)) continue
@@ -579,12 +673,13 @@ export class KyselyAdapter<
 
       if (!key.includes('.')) continue
 
-      const parts = key.split('.')
-      const resolved = this.resolveRelationPath(parts)
-      if (!resolved || resolved.isSimpleColumn || resolved.steps.length === 0)
-        continue
+      // Both a column path and a path that continues into a hasMany need the
+      // leading belongsTo hops joined — the latter so its `EXISTS` can
+      // correlate to the joined alias.
+      const target = this.walkRelationPath(key.split('.'), scope)
+      if (!target || target.steps.length === 0) continue
 
-      for (const step of resolved.steps) {
+      for (const step of target.steps) {
         if (options.alreadyJoined.includes(step.alias)) continue
 
         q = q.leftJoin(
@@ -596,7 +691,7 @@ export class KyselyAdapter<
         options.alreadyJoined.push(step.alias)
       }
 
-      const last = resolved.steps[resolved.steps.length - 1]
+      const last = target.steps[target.steps.length - 1]
       query = addToQuery(query, {
         [`${last.alias}.${last.targetKey}`]: { $ne: null },
       })
@@ -611,45 +706,74 @@ export class KyselyAdapter<
     '$every',
   ] as const
 
+  /**
+   * Build the correlated `EXISTS` / `NOT EXISTS` for one hasMany hop. The
+   * child filter is resolved in the related service's own scope, so it may
+   * itself contain relation paths — belongsTo hops become joins on the
+   * subquery, further hasMany hops become nested `EXISTS`.
+   */
   private buildHasManyExists(
     eb: ExpressionBuilder<any, any>,
-    relationKey: string,
-    relation: { databaseTableName?: string; keyHere: string; keyThere: string },
-    filterQuery: Record<string, any>,
-    operator: '$some' | '$none' | '$every' = '$some',
-  ) {
-    const subQueries: Expression<any>[] = []
+    target: Extract<RelationPathTarget, { kind: 'hasMany' }>,
+    filterQuery: any,
+    operator: '$some' | '$none' | '$every',
+  ): Expression<any> | undefined {
+    const { relation, relationKey, sourceAlias, rest } = target
+    if (!relation.databaseTableName) return
 
-    for (const subKey in filterQuery) {
-      const subQuery = this.handleQueryProperty(
-        eb,
-        subKey,
-        filterQuery[subKey],
-        { tableName: relationKey },
-      )
-      if (subQuery) subQueries.push(subQuery)
+    // Namespaced by the correlating alias so a nested or self-referencing
+    // hasMany never shadows the row source it is correlated to.
+    const alias =
+      sourceAlias === this.options.name
+        ? relationKey
+        : `${sourceAlias}__${relationKey}`
+
+    const scope: RelationScope = {
+      alias,
+      relations: this.lookupRelationsForService(relation.service),
     }
 
-    // For $every, we negate the filter conditions:
-    // "every child matches X" = "no child exists that does NOT match X"
-    const filterConditions =
-      operator === '$every' && subQueries.length
-        ? [eb.not(eb.and(subQueries))]
-        : subQueries
+    // A dot-path that continues past the hop (`categories.type.name`) becomes a
+    // filter in the child scope.
+    const childInput =
+      rest.length > 0 ? { [rest.join('.')]: filterQuery } : filterQuery
 
-    const whereRef = eb
-      .selectFrom(`${relation.databaseTableName} as ${relationKey}`)
+    if (!_.isObject(childInput) || Array.isArray(childInput)) return
+
+    const childQuery = this.flattenRelationQuery(
+      childInput as Query,
+      scope.relations,
+    )
+
+    let sub = eb
+      .selectFrom(`${relation.databaseTableName} as ${alias}`)
       .select(sql`1` as any)
-      .where((eb) =>
-        eb.and([
-          eb(
-            `${relationKey}.${relation.keyThere}`,
-            '=',
-            eb.ref(this.col(relation.keyHere)),
-          ),
-          ...filterConditions,
-        ]),
-      )
+
+    const joined = this.applyJoinsForWhere(sub, childQuery, {
+      alreadyJoined: [],
+      scope,
+    })
+    sub = joined.q
+
+    const whereRef = sub.where((subEb: ExpressionBuilder<any, any>) => {
+      const conditions = this.handleQuery(subEb, joined.query, { scope }) ?? []
+
+      // For $every we negate the filter conditions:
+      // "every child matches X" = "no child exists that does NOT match X"
+      const filterConditions =
+        operator === '$every' && conditions.length
+          ? [subEb.not(subEb.and(conditions))]
+          : conditions
+
+      return subEb.and([
+        subEb(
+          `${alias}.${relation.keyThere}`,
+          '=',
+          subEb.ref(`${sourceAlias}.${relation.keyHere}`),
+        ),
+        ...filterConditions,
+      ])
+    })
 
     // $some uses EXISTS, $none and $every use NOT EXISTS
     if (operator === '$some') {
@@ -658,162 +782,98 @@ export class KyselyAdapter<
     return eb.not(eb.exists(whereRef))
   }
 
-  private handleHasMany(
+  /**
+   * Resolve a query key that references a relation, in `scope`. Returns
+   * `undefined` when the key is not a relation reference (a plain column) or
+   * cannot be resolved, so the caller can fall back to normal handling.
+   */
+  private handleRelation(
     eb: ExpressionBuilder<any, any>,
     queryKey: string,
     queryProperty: any,
-  ) {
-    if (!this.options.relations) return
+    scope: RelationScope,
+  ): Expression<any> | undefined {
+    if (!scope.relations) return
 
-    let relation = this.options.relations[queryKey]
+    const parts = queryKey.split('.')
 
-    if (!relation && !queryKey.includes('.')) {
-      return
-    }
-
-    let relationKey = queryKey
-    let nested = true
-
-    if (!relation) {
-      const parts = queryKey.split('.')
-      // Multi-level paths through hasMany (e.g. 'user.todos.text') are not
-      // supported yet. Only direct `<hasMany>.<column>` is resolvable here.
-      if (parts.length !== 2) return
-
-      relationKey = parts[0]
-      nested = false
-
-      relation = this.options.relations[relationKey]
-    }
-
+    // Nested notation on a belongsTo relation. The top-level query is
+    // normalized in `flattenRelationQuery` before it gets here; this covers
+    // sub-filters built inside an EXISTS subquery.
+    const direct = parts.length === 1 ? scope.relations[queryKey] : undefined
     if (
-      !relation ||
-      !relation.databaseTableName ||
-      !relation.keyHere ||
-      !relation.keyThere ||
-      !relation.asArray
+      direct &&
+      !direct.asArray &&
+      this.isPlainRelationObject(queryProperty) &&
+      !Object.keys(queryProperty).some((key) =>
+        KyselyAdapter.COLLECTION_OPERATORS.includes(key as any),
+      )
     ) {
-      return
+      const flattened: Record<string, any> = {}
+      this.flattenBelongsToInto(
+        queryProperty,
+        [queryKey],
+        flattened,
+        this.lookupRelationsForService(direct.service),
+      )
+
+      const conditions = this.handleQuery(eb, flattened, { scope })
+      return conditions?.length ? eb.and(conditions) : undefined
     }
 
-    if (nested) {
-      const results: Expression<any>[] = []
+    const target = this.walkRelationPath(parts, scope)
+    if (!target) return
 
-      // Separate collection operators ($none, $some, $every) from regular filters
-      const regularFilters: Record<string, any> = {}
-      const collectionOps = KyselyAdapter.COLLECTION_OPERATORS
+    if (target.kind === 'column') {
+      // No hops — a plain column, which the caller handles.
+      if (target.steps.length === 0) return
 
-      for (const subKey in queryProperty) {
-        if (collectionOps.includes(subKey as (typeof collectionOps)[number])) {
-          const expr = this.buildHasManyExists(
-            eb,
-            relationKey,
-            relation,
-            queryProperty[subKey],
-            subKey as '$none' | '$some' | '$every',
-          )
-          results.push(expr)
-        } else {
-          regularFilters[subKey] = queryProperty[subKey]
-        }
-      }
+      return this.handleQueryPropertyNormal(
+        eb,
+        `${target.columnAlias}.${target.columnName}`,
+        queryProperty,
+        { tableName: null },
+      )
+    }
 
-      // Regular filters without an explicit operator default to $some (backward-compatible)
-      if (Object.keys(regularFilters).length > 0) {
+    // A dot-path continuing past the hop always means "at least one child
+    // matches" — $none / $every are only expressible in nested notation.
+    if (target.rest.length > 0) {
+      return this.buildHasManyExists(eb, target, queryProperty, '$some')
+    }
+
+    if (!_.isObject(queryProperty) || Array.isArray(queryProperty)) return
+
+    const results: Expression<any>[] = []
+    const regularFilters: Record<string, any> = {}
+
+    for (const subKey in queryProperty) {
+      if (
+        KyselyAdapter.COLLECTION_OPERATORS.includes(
+          subKey as (typeof KyselyAdapter.COLLECTION_OPERATORS)[number],
+        )
+      ) {
         const expr = this.buildHasManyExists(
           eb,
-          relationKey,
-          relation,
-          regularFilters,
+          target,
+          (queryProperty as Record<string, any>)[subKey],
+          subKey as '$none' | '$some' | '$every',
         )
-        results.push(expr)
+        if (expr) results.push(expr)
+      } else {
+        regularFilters[subKey] = (queryProperty as Record<string, any>)[subKey]
       }
-
-      if (results.length === 1) return results[0]
-      if (results.length > 1) return eb.and(results)
-      return undefined
     }
 
-    // Dot notation: always behaves as $some (backward-compatible)
-    const subQueries: Expression<any>[] = []
-    const nestedWhere = this.handleQueryPropertyNormal(
-      eb,
-      queryKey,
-      queryProperty,
-      {
-        tableName: relationKey,
-      },
-    )
-    if (nestedWhere) subQueries.push(nestedWhere)
-
-    const whereRef = eb
-      .selectFrom(`${relation.databaseTableName} as ${relationKey}`)
-      .select(sql`1` as any)
-      .where((eb) =>
-        eb.and([
-          eb(
-            `${relationKey}.${relation.keyThere}`,
-            '=',
-            eb.ref(this.col(relation.keyHere)),
-          ),
-          ...subQueries,
-        ]),
-      )
-
-    return eb.exists(whereRef)
-  }
-
-  private handleBelongsTo(
-    eb: ExpressionBuilder<any, any>,
-    queryKey: string,
-    queryProperty: any,
-  ) {
-    if (!this.options.relations) return
-
-    const directRelation = this.options.relations[queryKey]
-
-    if (!directRelation && !queryKey.includes('.')) {
-      return
+    // Regular filters without an explicit operator default to $some
+    if (Object.keys(regularFilters).length > 0) {
+      const expr = this.buildHasManyExists(eb, target, regularFilters, '$some')
+      if (expr) results.push(expr)
     }
 
-    // Dot-notation path: resolve across any number of belongsTo hops.
-    if (!directRelation) {
-      const parts = queryKey.split('.')
-      const resolved = this.resolveRelationPath(parts)
-      if (!resolved || resolved.isSimpleColumn || resolved.steps.length === 0) {
-        return
-      }
-
-      const aliasedKey = `${resolved.columnAlias}.${resolved.columnName}`
-      return this.handleQueryPropertyNormal(eb, aliasedKey, queryProperty, {
-        tableName: null,
-      })
-    }
-
-    // Nested notation: this path is entered when applyJoins did not flatten
-    // (e.g. inside buildHasManyExists). Preserves 1-level behavior.
-    if (
-      !directRelation.databaseTableName ||
-      !directRelation.keyHere ||
-      !directRelation.keyThere ||
-      directRelation.asArray
-    ) {
-      return
-    }
-
-    const subQueries: Expression<any>[] = []
-    for (const subKey in queryProperty) {
-      const subQuery = this.handleQueryProperty(
-        eb,
-        subKey,
-        queryProperty[subKey],
-        { tableName: queryKey },
-      )
-
-      if (subQuery) subQueries.push(subQuery)
-    }
-
-    return subQueries.length === 0 ? undefined : eb.and(subQueries)
+    if (results.length === 1) return results[0]
+    if (results.length > 1) return eb.and(results)
+    return undefined
   }
 
   /**
@@ -994,7 +1054,14 @@ export class KyselyAdapter<
       return result?.length ? eb.not(eb.and(result)) : undefined
     }
 
-    const col = this.col(queryKey, { tableName: options?.tableName })
+    // An explicit `tableName` wins (including `null`, meaning "already
+    // qualified"); otherwise a scope qualifies with its own alias.
+    const tableName =
+      options && 'tableName' in options
+        ? options.tableName
+        : options?.scope?.alias
+
+    const col = this.col(queryKey, { tableName })
 
     // Opt-in, type-aware date coercion: when the column is declared temporal
     // (via `getPropertyType` or an `x-db-type` schema annotation), normalize
@@ -1100,33 +1167,36 @@ export class KyselyAdapter<
       return undefined
     }
 
-    // Inside a related-table scope (a hasMany EXISTS subquery, or a nested
-    // belongsTo object) the relation handlers resolve paths against *this*
-    // service's relations and against the outer FROM clause. Applying them
-    // there emits refs to tables the (sub)query never joined.
-    const inRelationScope = !!options?.tableName
+    const scope = options?.scope
+    // A `tableName` without a scope is the legacy nested-belongsTo context: we
+    // know which table the columns belong to, but not its relations, so
+    // relation paths cannot be resolved there.
+    const isLegacyScope = !scope && !!options?.tableName
 
-    const hasMany = inRelationScope
-      ? undefined
-      : this.handleHasMany(eb, queryKey, queryProperty)
+    if (!isLegacyScope) {
+      const relation = this.handleRelation(
+        eb,
+        queryKey,
+        queryProperty,
+        scope ?? this.rootScope(),
+      )
 
-    if (hasMany) return hasMany
+      if (relation) return relation
+    }
 
-    const belongsTo = inRelationScope
-      ? undefined
-      : this.handleBelongsTo(eb, queryKey, queryProperty)
+    // JSON traversal reads this service's column types and qualifies with its
+    // table, so it only applies to the service's own row source.
+    if (!scope) {
+      const json = this.handleJson(eb, queryKey, queryProperty)
 
-    if (belongsTo) return belongsTo
-
-    const json = this.handleJson(eb, queryKey, queryProperty)
-
-    if (json) return json
+      if (json) return json
+    }
 
     // Unresolved dot-paths must not leak into WHERE as raw column refs.
     // A path reaches this point only if none of the handlers above claimed
     // it. We skip it when either:
     //   - the first segment matches a known relation (broken chain, e.g.
-    //     'user.bogus.name' or hasMany chain 'todos.user.name'), or
+    //     'user.bogus.name'), or
     //   - the path has 2+ separators (multi-segment paths are only valid
     //     as relation chains or JSON access, both of which would have been
     //     caught above; anything else is almost certainly unintended).
@@ -1134,14 +1204,29 @@ export class KyselyAdapter<
     // left alone — they may be legitimate qualified refs like
     // `alias.column` added by addToQuery null-protect on a prior hop.
     if (queryKey.includes('.')) {
-      // In a related-table scope a dot-path is neither a JSON access (handled
-      // above) nor something `col()` can qualify — `col('a.b', { tableName })`
-      // would build a three-part ref. Drop it.
-      if (inRelationScope) return undefined
+      if (isLegacyScope) return undefined
 
       const parts = queryKey.split('.')
       if (parts.length > 2) return undefined
-      if (this.options.relations?.[parts[0]]) return undefined
+
+      const relations = scope ? scope.relations : this.options.relations
+      if (relations?.[parts[0]]) return undefined
+
+      if (scope) {
+        // Inside a subquery only aliases derived from its own scope are in the
+        // FROM clause; any other qualified ref would point at a table it never
+        // joined.
+        if (
+          parts[0] !== scope.alias &&
+          !parts[0].startsWith(`${scope.alias}__`)
+        ) {
+          return undefined
+        }
+
+        return this.handleQueryPropertyNormal(eb, queryKey, queryProperty, {
+          tableName: null,
+        })
+      }
     }
 
     const normal = this.handleQueryPropertyNormal(
