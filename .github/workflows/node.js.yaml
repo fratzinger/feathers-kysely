@@ -15,11 +15,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: npm install -g corepack@latest
       - run: corepack enable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: "pnpm"
@@ -30,16 +30,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [24.x, 26.x]
     env:
       DB: sqlite
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npm install -g corepack@latest
       - run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
@@ -51,8 +51,8 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [22.x, 24.x]
-        postgres-version: [14, 15, 16, 17, latest] # see https://hub.docker.com/_/postgres
+        node-version: [24.x, 26.x]
+        postgres-version: [16, 17, 18, latest] # see https://hub.docker.com/_/postgres
 
     services:
       postgres:
@@ -68,12 +68,12 @@ jobs:
       DB: postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: npm install -g corepack@latest
       - run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
@@ -85,7 +85,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [24.x, 26.x]
         mysql-version: [lts, latest] # see https://hub.docker.com/_/mysql/
 
     services:
@@ -103,11 +103,11 @@ jobs:
       DB: mysql
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npm install -g corepack@latest
       - run: corepack enable
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
@@ -117,11 +117,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npm install -g corepack@latest
       - run: corepack enable
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
           cache: "pnpm"
