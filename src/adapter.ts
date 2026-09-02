@@ -57,6 +57,7 @@ import {
   OPERATORS,
   POSTGRES_ONLY_JSON_OPERATORS,
   POSTGRES_ONLY_OPERATORS,
+  qualifyColumn,
   temporalKind,
   transformOperatorValue,
   traverseJSON,
@@ -1360,22 +1361,16 @@ export class KyselyAdapter<
     return { q, ref: `${derivedAlias}.${SORT_VALUE}` }
   }
 
+  /** `qualifyColumn` bound to this service's table and declared columns. */
   private col<T>(
     column: T,
     options?: { tableName: string | null | undefined },
   ): T {
-    if (Array.isArray(column))
-      return column.map((item) => this.col(item, options)) as T
-    if (typeof column !== 'string') return column
-    if (options?.tableName === null) return column
-
-    const tableName =
-      options?.tableName ||
-      (this.propertyMap.has(column) ? this.options.name : null)
-
-    if (!tableName || column.startsWith(`${tableName}.`)) return column
-
-    return `${tableName}.${column}` as T
+    return qualifyColumn(column, {
+      tableName: options?.tableName,
+      ownTable: this.options.name,
+      isOwnColumn: (name) => this.propertyMap.has(name),
+    })
   }
 
   applyWhere<Q extends Record<string, any>>(
