@@ -1258,6 +1258,127 @@ describe('relations', () => {
     assert.strictEqual(todos[0].userId, users[1].id)
   })
 
+  // MARK: sorting never duplicates parent rows
+
+  it('$sort by a non-unique to-one column does not duplicate rows', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` is declared to-one on a non-unique column, so a plain JOIN
+    // would return Alice and Bob twice each. The adapter can only prove
+    // uniqueness when `keyThere` is the target's id, so this hop is resolved
+    // through a GROUP BY derived table instead.
+    const result = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(result.map((user: any) => user.name).sort(), [
+      'Alice',
+      'Bob',
+      'Carol',
+    ])
+
+    const paginated = (await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1 } },
+      paginate: { default: 10, max: 100 },
+    })) as any
+    assert.strictEqual(paginated.total, 3)
+    assert.strictEqual(paginated.data.length, 3)
+  })
+
+  it('$sort by a non-unique to-one still orders by the aggregate', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Zoe', age: 40 },
+      { name: 'Yves', age: 40 },
+    ])
+
+    // age 30 aggregates to MIN('Alice','Bob') = 'Alice'
+    // age 40 aggregates to MIN('Yves','Zoe')  = 'Yves'
+    const asc = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1, name: 1 } },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      asc.map((user: any) => user.name),
+      ['Alice', 'Bob', 'Yves', 'Zoe'],
+    )
+
+    // descending flips to MAX: age 40 → 'Zoe', age 30 → 'Bob'
+    const desc = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': -1, name: 1 } },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      desc.map((user: any) => user.name),
+      ['Yves', 'Zoe', 'Alice', 'Bob'],
+    )
+  })
+
+  it('$sort by a hasMany relation does not duplicate rows', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    // Alice has three todos — a JOIN would return her three times
+    await app.service('todos').create([
+      { text: 'a1', userId: users[0].id },
+      { text: 'a2', userId: users[0].id },
+      { text: 'a3', userId: users[0].id },
+      { text: 'b1', userId: users[1].id },
+    ])
+
+    const paginated = (await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: { default: 10, max: 100 },
+    })) as any
+
+    assert.strictEqual(paginated.total, 2)
+    assert.deepStrictEqual(
+      paginated.data.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+  })
+
+  it('$sort through a broken relation path throws', async () => {
+    await app.service('users').create({ name: 'Alice' })
+
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { $sort: { 'user.bogus.name': 1 } },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /Invalid \$sort/)
+        return true
+      },
+    )
+  })
+
+  it('$sort by a hasMany behind another relation throws', async () => {
+    await app.service('users').create({ name: 'Alice' })
+
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { $sort: { 'user.todos.text': 1 } },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /not supported/)
+        return true
+      },
+    )
+  })
+
   // MARK: hasMany sort
 
   it('sort by hasMany relation column ascending (MIN)', async () => {
