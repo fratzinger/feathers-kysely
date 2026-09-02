@@ -18,6 +18,12 @@ npm install @fratzinger/feathers-kysely kysely
 
 [Read the full documentation](https://feathers-kysely.fratzinger.workers.dev/)
 
+## Contributing
+
+`pnpm test` runs the suite (`DB=sqlite|postgres|mysql`, see `test/dialect.ts`).
+`pnpm bench` runs the query benchmarks — see [`bench/README.md`](bench/README.md)
+for the regression workflow.
+
 ## License
 
 Copyright (c) 2026 [Feathers contributors](https://github.com/feathersjs/feathers/graphs/contributors)

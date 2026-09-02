@@ -17,6 +17,11 @@ export default defineConfig({
     // projects: ['vitest'],
     includeSource: ['src/**/*.{js,ts}'],
     include: ['test/**/*.test.ts'],
+    benchmark: {
+      // Benchmarks execute real queries against `DB`; they are never part of
+      // `vitest run`, only of `vitest bench`.
+      include: ['bench/**/*.bench.ts'],
+    },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
