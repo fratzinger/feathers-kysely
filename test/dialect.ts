@@ -37,7 +37,7 @@ export default (): Dialect => {
 
   if (DB === 'postgres') {
     const config: PoolConfig = {
-      host: 'localhost',
+      host: process.env.POSTGRES_HOST ?? 'localhost',
       user: process.env.POSTGRES_USER ?? 'postgres',
       password:
         'POSTGRES_PASSWORD' in process.env
