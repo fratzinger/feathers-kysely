@@ -34,9 +34,8 @@ committed file.
 ### Reading the numbers
 
 **Compare a case against itself across runs, never against another case.** The
-cases differ in selectivity, so `belongsTo 2 hops` being faster than
-`belongsTo 1 hop` says nothing about hop count — it says the two filters match
-different numbers of rows.
+cases differ in selectivity as well as in shape, so a case being faster than
+another says as much about how many rows its filter matches as about the SQL.
 
 Treat anything under roughly 1.1x as noise, and look at `hz` and `mean` rather
 than the summary factor, which a single outlier in `max` can distort. Re-run a
@@ -47,7 +46,8 @@ suspicious case before believing it.
 | Variable | Effect |
 | --- | --- |
 | `DB` | `sqlite` (default), `postgres`, `mysql` — see `test/dialect.ts` |
-| `BENCH_SCALE` | Multiplies all row counts (default `1` ≈ 72k rows) |
+| `BENCH_SCALE` | Multiplies all row counts (default `1` ≈ 11k rows) |
+| `BENCH_INDEXES` | `1` adds secondary indexes — **off by default** |
 
 Data is generated from a fixed PRNG seed, so two runs measure the same rows.
 
@@ -63,10 +63,25 @@ events ──▶ assignment ──▶ customer ──▶ owner (users)
                └─▶ categories ──▶ type     └─▶ ownedCustomers ──▶ assignments
 ```
 
-Every column any case filters or sorts on is indexed. That is not incidental:
-without an index, a chained filter degrades to a sequential scan inside a
-correlated subquery and the timing tells you about table size instead of about
-the SQL. If you add a case that filters a new column, add its index too.
+### Indexes are off by default
+
+Only primary keys exist unless you set `BENCH_INDEXES=1`. That is deliberate:
+real schemas are rarely indexed on every filtered column, and an un-indexed
+table is exactly where the *shape* of the SQL decides the plan. A regression
+that a covering index would hide is still a regression for the people running
+this adapter.
+
+Run with `BENCH_INDEXES=1` when you want to see what an index buys a specific
+case — but compare an indexed run against an indexed baseline, never against
+an un-indexed one.
+
+One case is intrinsically quadratic without an index: `$sort by hasMany column`
+compiles to a correlated aggregate subquery evaluated per row, so at the default
+scale it costs ~220ms while every other case sits under 1.5ms. It stays in the
+table because it is worth watching, but it completes only a dozen or so
+iterations per run — re-run before believing a delta there. Scaling
+`BENCH_SCALE` up without indexes grows that case quadratically while the rest
+grow linearly.
 
 ## Gotchas
 

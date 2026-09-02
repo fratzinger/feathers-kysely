@@ -18,9 +18,10 @@ import {
  *   pnpm bench --outputJson=bench/baseline.json   # on the reference commit
  *   pnpm bench --compare=bench/baseline.json      # after the change
  *
- * `DB` picks the dialect (see `test/dialect.ts`); `BENCH_SCALE` multiplies the
- * row counts. The data is seeded from a fixed PRNG seed, so two runs measure
- * the same rows.
+ * `DB` picks the dialect (see `test/dialect.ts`), `BENCH_SCALE` multiplies the
+ * row counts, and `BENCH_INDEXES=1` adds secondary indexes — off by default, so
+ * the run measures the under-indexed case where the SQL shape decides the plan.
+ * The data is seeded from a fixed PRNG seed, so two runs measure the same rows.
  */
 
 const db = new Kysely<BenchDB>({ dialect: dialect() })
@@ -32,12 +33,19 @@ const counts = seedCounts()
 // in benchmark mode, so without this `app.setup()` never happens and every
 // multi-hop chain fails with a BadRequest — which benchmarks report as NaN
 // rather than as an error.
-await createSchema(db)
+const indexes = !!process.env.BENCH_INDEXES
+
+await createSchema(db, { indexes })
 await seed(db, counts)
 await app.setup()
 
 const totalRows = Object.values(counts).reduce((sum, n) => sum + n, 0)
-console.log(`seeded ${totalRows.toLocaleString('en-US')} rows`, counts)
+console.log(
+  `seeded ${totalRows.toLocaleString('en-US')} rows, secondary indexes ${
+    indexes ? 'on' : 'off'
+  }`,
+  counts,
+)
 
 describe(`relation queries (${getDialect()})`, () => {
   for (const testCase of QUERY_CASES) {
@@ -48,7 +56,7 @@ describe(`relation queries (${getDialect()})`, () => {
       },
       // A round-trip per iteration, so the default 500ms budget can collect
       // zero samples for the heavier chains and report NaN.
-      { time: 2_000, warmupTime: 500 },
+      { time: 3_000, warmupTime: 300 },
     )
   }
 })

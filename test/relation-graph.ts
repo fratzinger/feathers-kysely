@@ -152,7 +152,10 @@ const TABLES = [
   'users',
 ] as const
 
-export const createSchema = async (db: Kysely<any>) => {
+export const createSchema = async (
+  db: Kysely<any>,
+  options: { indexes?: boolean } = {},
+) => {
   for (const table of TABLES) {
     await db.schema.dropTable(table).ifExists().execute()
   }
@@ -201,8 +204,12 @@ export const createSchema = async (db: Kysely<any>) => {
     'id',
   ).execute()
 
-  // Without these every case degrades to a sequential scan and the timings say
-  // more about table size than about the SQL we generate.
+  // Secondary indexes are opt-in. Real schemas are rarely indexed on every
+  // filtered column, and an un-indexed table is exactly where the shape of the
+  // SQL decides the plan. Primary keys are always present, so a FK referencing
+  // one still gets an index lookup on the target side.
+  if (!options.indexes) return
+
   const indexes: [string, string, string][] = [
     ['customers_ownerId', 'customers', 'ownerId'],
     ['customers_fullName', 'customers', 'fullName'],
@@ -247,16 +254,23 @@ export type SeedCounts = {
   events: number
 }
 
-/** Scaled by `BENCH_SCALE` so a run can be made heavier without code changes. */
+/**
+ * Scaled by `BENCH_SCALE` so a run can be made heavier without code changes.
+ *
+ * Sized for an un-indexed run: large enough that the query plan dominates the
+ * round-trip, small enough that every case stays measurable. Scaling up without
+ * `BENCH_INDEXES` grows the correlated-aggregate sort quadratically while the
+ * rest grow linearly — see `bench/README.md`.
+ */
 export const seedCounts = (
   scale = Number(process.env.BENCH_SCALE ?? 1),
 ): SeedCounts => ({
-  users: Math.round(500 * scale),
-  customers: Math.round(2_000 * scale),
-  assignments: Math.round(10_000 * scale),
+  users: Math.round(75 * scale),
+  customers: Math.round(300 * scale),
+  assignments: Math.round(1_500 * scale),
   types: 20,
-  categories: Math.round(40_000 * scale),
-  events: Math.round(20_000 * scale),
+  categories: Math.round(6_000 * scale),
+  events: Math.round(3_000 * scale),
 })
 
 // Postgres allows 65535 bind parameters per statement; stay well under it.
