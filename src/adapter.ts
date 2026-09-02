@@ -324,7 +324,6 @@ export class KyselyAdapter<
 
     let q = this.db(params).selectFrom(this.options.name)
     const applyResult = this.applyJoins(q, filterQueryResult.params, {
-      where: options?.where,
       order: options?.order,
     })
     q = applyResult.q
@@ -375,33 +374,27 @@ export class KyselyAdapter<
     return q
   }
 
+  /**
+   * Normalize the query's relation notation and add the JOINs that `$sort`
+   * needs. Relation *filters* never join — they compile to `EXISTS`
+   * subqueries, so they cannot duplicate parent rows.
+   */
   private applyJoins<Q extends Record<string, any>>(
     q: Q,
     params: Params,
     options: {
-      where?: boolean
       order?: boolean
     },
   ): { q: Q; query: Query } {
     let query = params.query || {}
     if (!this.options.relations) return { q, query }
 
-    // Normalize nested belongsTo notation to dot-notation so both JOIN analysis
-    // and WHERE-clause generation see a single canonical shape.
+    // Normalize nested belongsTo notation to dot-notation so the JOIN analysis
+    // for $sort and the WHERE-clause generation see a single canonical shape.
     query = this.flattenRelationQuery(query)
 
-    const alreadyJoined: string[] = []
-
-    if (options.where) {
-      const whereResult = this.applyJoinsForWhere(q, query, {
-        alreadyJoined,
-      })
-      q = whereResult.q
-      query = whereResult.query
-    }
-
     if (options.order && query.$sort) {
-      q = this.applyJoinsForOrderBy(q, query.$sort, { alreadyJoined })
+      q = this.applyJoinsForOrderBy(q, query.$sort, { alreadyJoined: [] })
     }
 
     return { q, query }
@@ -646,84 +639,58 @@ export class KyselyAdapter<
     }
   }
 
-  private applyJoinsForWhere<Q extends Record<string, any>>(
-    q: Q,
-    query: Query,
-    options: {
-      alreadyJoined: string[]
-      scope?: RelationScope
-    },
-  ): { q: Q; query: Query } {
-    const scope = options.scope ?? this.rootScope()
-    if (!scope.relations) return { q, query }
-
-    for (const key in query) {
-      if (FILTERS.has(key)) continue
-
-      if ((key === '$and' || key === '$or') && Array.isArray(query[key])) {
-        let array = query[key]
-        let clonedArray = false
-        for (let i = 0; i < array.length; i++) {
-          const subQuery = array[i]
-          const { q: subQ, query: modifiedSubQuery } = this.applyJoinsForWhere(
-            q,
-            subQuery,
-            options,
-          )
-
-          q = subQ
-
-          if (subQuery !== modifiedSubQuery) {
-            if (!clonedArray) {
-              array = [...array]
-              clonedArray = true
-            }
-
-            array[i] = modifiedSubQuery
-          }
-        }
-
-        if (query[key] !== array) {
-          query = { ...query, [key]: array }
-        }
-
-        continue
-      }
-
-      if (!key.includes('.')) continue
-
-      // Both a column path and a path that continues into a hasMany need the
-      // leading belongsTo hops joined — the latter so its `EXISTS` can
-      // correlate to the joined alias.
-      const target = this.walkRelationPath(key.split('.'), scope)
-      if (!target || target.steps.length === 0) continue
-
-      for (const step of target.steps) {
-        if (options.alreadyJoined.includes(step.alias)) continue
-
-        q = q.leftJoin(
-          `${step.databaseTableName} as ${step.alias}`,
-          `${step.alias}.${step.targetKey}`,
-          `${step.sourceAlias}.${step.sourceKey}`,
-        )
-
-        options.alreadyJoined.push(step.alias)
-      }
-
-      const last = target.steps[target.steps.length - 1]
-      query = addToQuery(query, {
-        [`${last.alias}.${last.targetKey}`]: { $ne: null },
-      })
-    }
-
-    return { q, query }
-  }
-
   private static readonly COLLECTION_OPERATORS = [
     '$none',
     '$some',
     '$every',
   ] as const
+
+  /**
+   * Express a chain of belongsTo hops as a correlated `EXISTS` subquery
+   * instead of joins on the outer builder: the first hop becomes the
+   * subquery's FROM and correlation, every further hop an INNER JOIN inside
+   * it. `buildInner` contributes the condition on the row the chain arrives
+   * at. Used where the outer builder cannot take a join (UPDATE/DELETE) or
+   * where a joined predicate would sit inside a negation (`$not`).
+   */
+  private buildBelongsToExists(
+    eb: ExpressionBuilder<any, any>,
+    steps: JoinStep[],
+    buildInner: (
+      subEb: ExpressionBuilder<any, any>,
+    ) => Expression<any> | undefined,
+  ): Expression<any> | undefined {
+    if (!steps.length) return
+
+    const [first, ...rest] = steps
+
+    let sub = eb
+      .selectFrom(`${first.databaseTableName} as ${first.alias}`)
+      .select(sql`1` as any)
+
+    for (const step of rest) {
+      sub = sub.innerJoin(
+        `${step.databaseTableName} as ${step.alias}`,
+        `${step.alias}.${step.targetKey}`,
+        `${step.sourceAlias}.${step.sourceKey}`,
+      )
+    }
+
+    const whereRef = sub.where((subEb: ExpressionBuilder<any, any>) => {
+      const inner = buildInner(subEb)
+
+      return subEb.and([
+        subEb(
+          `${first.alias}.${first.targetKey}`,
+          '=',
+          subEb.ref(`${first.sourceAlias}.${first.sourceKey}`),
+        ),
+        ...(inner ? [inner] : []),
+      ])
+    })
+
+    return eb.exists(whereRef)
+  }
 
   /**
    * Build the correlated `EXISTS` / `NOT EXISTS` for one hasMany hop. The
@@ -764,18 +731,12 @@ export class KyselyAdapter<
       scope.relations,
     )
 
-    let sub = eb
+    const sub = eb
       .selectFrom(`${relation.databaseTableName} as ${alias}`)
       .select(sql`1` as any)
 
-    const joined = this.applyJoinsForWhere(sub, childQuery, {
-      alreadyJoined: [],
-      scope,
-    })
-    sub = joined.q
-
     const whereRef = sub.where((subEb: ExpressionBuilder<any, any>) => {
-      const conditions = this.handleQuery(subEb, joined.query, { scope }) ?? []
+      const conditions = this.handleQuery(subEb, childQuery, { scope }) ?? []
 
       // For $every we negate the filter conditions:
       // "every child matches X" = "no child exists that does NOT match X"
@@ -878,52 +839,74 @@ export class KyselyAdapter<
       // No hops — a plain column, which the caller handles.
       if (target.steps.length === 0) return
 
-      return this.handleQueryPropertyNormal(
-        eb,
-        `${target.columnAlias}.${target.columnName}`,
-        queryProperty,
-        { tableName: null },
+      // The belongsTo prefix becomes a semi-join, never a JOIN on the outer
+      // builder: EXISTS cannot duplicate parent rows, needs no null-protect,
+      // and stays correct inside a negation and in UPDATE/DELETE.
+      return this.buildBelongsToExists(eb, target.steps, (subEb) =>
+        this.handleQueryPropertyNormal(
+          subEb,
+          `${target.columnAlias}.${target.columnName}`,
+          queryProperty,
+          { tableName: null },
+        ),
       )
     }
 
     // A dot-path continuing past the hop always means "at least one child
     // matches" — $none / $every are only expressible in nested notation.
-    if (target.rest.length > 0) {
-      return this.buildHasManyExists(eb, target, queryProperty, '$some')
-    }
+    const buildHasMany = (
+      innerEb: ExpressionBuilder<any, any>,
+    ): Expression<any> | undefined => {
+      if (target.rest.length > 0) {
+        return this.buildHasManyExists(innerEb, target, queryProperty, '$some')
+      }
 
-    if (!_.isObject(queryProperty) || Array.isArray(queryProperty)) return
+      if (!_.isObject(queryProperty) || Array.isArray(queryProperty)) return
 
-    const results: Expression<any>[] = []
-    const regularFilters: Record<string, any> = {}
+      const results: Expression<any>[] = []
+      const regularFilters: Record<string, any> = {}
 
-    for (const subKey in queryProperty) {
-      if (
-        KyselyAdapter.COLLECTION_OPERATORS.includes(
-          subKey as (typeof KyselyAdapter.COLLECTION_OPERATORS)[number],
-        )
-      ) {
+      for (const subKey in queryProperty) {
+        if (
+          KyselyAdapter.COLLECTION_OPERATORS.includes(
+            subKey as (typeof KyselyAdapter.COLLECTION_OPERATORS)[number],
+          )
+        ) {
+          const expr = this.buildHasManyExists(
+            innerEb,
+            target,
+            (queryProperty as Record<string, any>)[subKey],
+            subKey as '$none' | '$some' | '$every',
+          )
+          if (expr) results.push(expr)
+        } else {
+          regularFilters[subKey] = (queryProperty as Record<string, any>)[
+            subKey
+          ]
+        }
+      }
+
+      // Regular filters without an explicit operator default to $some
+      if (Object.keys(regularFilters).length > 0) {
         const expr = this.buildHasManyExists(
-          eb,
+          innerEb,
           target,
-          (queryProperty as Record<string, any>)[subKey],
-          subKey as '$none' | '$some' | '$every',
+          regularFilters,
+          '$some',
         )
         if (expr) results.push(expr)
-      } else {
-        regularFilters[subKey] = (queryProperty as Record<string, any>)[subKey]
       }
+
+      if (results.length === 1) return results[0]
+      if (results.length > 1) return innerEb.and(results)
+      return undefined
     }
 
-    // Regular filters without an explicit operator default to $some
-    if (Object.keys(regularFilters).length > 0) {
-      const expr = this.buildHasManyExists(eb, target, regularFilters, '$some')
-      if (expr) results.push(expr)
-    }
-
-    if (results.length === 1) return results[0]
-    if (results.length > 1) return eb.and(results)
-    return undefined
+    // The hop correlates to the alias its belongsTo prefix arrives at, so the
+    // hasMany condition sits inside the EXISTS over that prefix.
+    return target.steps.length === 0
+      ? buildHasMany(eb)
+      : this.buildBelongsToExists(eb, target.steps, buildHasMany)
   }
 
   /**
@@ -1100,6 +1083,7 @@ export class KyselyAdapter<
       // Negate the whole condition object at the DB level: NOT (k1 AND k2 ...).
       // Operator-agnostic and correct for multi-key conditions, unlike a
       // per-property inversion.
+      //
       const result = this.handleQuery(eb, queryProperty, options)
       return result?.length ? eb.not(eb.and(result)) : undefined
     }
@@ -1177,7 +1161,11 @@ export class KyselyAdapter<
     return `${tableName}.${column}` as T
   }
 
-  applyWhere<Q extends Record<string, any>>(q: Q, query: Query) {
+  applyWhere<Q extends Record<string, any>>(
+    q: Q,
+    query: Query,
+    options?: HandleQueryOptions,
+  ) {
     // loop through params and call the where filters
 
     if (!query || Object.keys(query).length === 0) {
@@ -1186,7 +1174,7 @@ export class KyselyAdapter<
 
     const eb = expressionBuilder()
 
-    const result = this.handleQuery(eb, query)
+    const result = this.handleQuery(eb, query, options)
 
     return result?.length
       ? q.where((eb: ExpressionBuilder<any, any>) => eb.and(result))

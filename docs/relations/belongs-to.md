@@ -96,16 +96,22 @@ await app.service("events").find({
 
 ### SQL output
 
-Chained paths produce one `LEFT JOIN` per hop, with aliases built by joining the relation keys with `__`:
+A filter compiles to one correlated `EXISTS`; further hops become `INNER JOIN`s inside it, with aliases built by joining the relation keys with `__`:
 
 ```sql
 SELECT events.* FROM events
-LEFT JOIN assignments AS assignment          ON assignment.id = events.assignmentId
-LEFT JOIN customers   AS assignment__customer ON assignment__customer.id = assignment.customerId
-WHERE assignment__customer.fullName = 'Acme Corp'
+WHERE EXISTS (
+  SELECT 1 FROM assignments AS assignment
+  INNER JOIN customers AS assignment__customer
+          ON assignment__customer.id = assignment.customerId
+  WHERE assignment.id = events.assignmentId
+    AND assignment__customer.fullName = 'Acme Corp'
+)
 ```
 
-Paths that share a prefix deduplicate their JOINs — `'assignment.customer.fullName'` and `'assignment.number'` in the same query only join `assignments` once.
+Because this is a semi-join, a chain can never duplicate the parent row — not even when a relation declared `asArray: false` points at a non-unique column.
+
+Each filter builds its own subquery: `'assignment.customer.fullName'` and `'assignment.number'` in the same query produce two `EXISTS` clauses rather than sharing one join. `$sort` still joins, and there JOINs sharing a prefix are deduplicated.
 
 ### Requirements and limits
 

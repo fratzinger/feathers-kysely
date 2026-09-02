@@ -2,7 +2,7 @@
 
 ## belongsTo
 
-For `asArray: false` (belongsTo) relations, filter by the related record's columns using dot notation or nested notation. This translates to a `LEFT JOIN`. Chains of any depth are supported — see [belongsTo → Multi-level chains](./belongs-to#multi-level-chains) for details.
+For `asArray: false` (belongsTo) relations, filter by the related record's columns using dot notation or nested notation. This translates to a correlated `EXISTS` subquery — a semi-join, so it can never duplicate parent rows. Chains of any depth are supported — see [belongsTo → Multi-level chains](./belongs-to#multi-level-chains) for details.
 
 ```ts
 // 1-level (either form works)
@@ -61,7 +61,7 @@ Implemented as "no child exists that does NOT match" — `WHERE NOT EXISTS (SELE
 
 ## Mixed chains
 
-A relation path may mix belongsTo and hasMany hops in any order and to any depth. Each belongsTo hop becomes a `LEFT JOIN`; each hasMany hop opens an `EXISTS` subquery, and the rest of the path is resolved inside it against the related service's own relations.
+A relation path may mix belongsTo and hasMany hops in any order and to any depth. Every hop becomes a correlated `EXISTS` subquery, and the rest of the path is resolved inside it against the related service's own relations.
 
 ```ts
 // assignmentEvents → assignment (belongsTo) → assignmentCategories (hasMany)
@@ -78,12 +78,15 @@ await app.service("assignment-events").find({
 
 ```sql
 SELECT assignment_events.* FROM assignment_events
-LEFT JOIN assignments AS assignment ON assignment.id = assignment_events.assignmentId
 WHERE EXISTS (
-  SELECT 1 FROM assignment_categories AS assignment__assignmentCategories
-  WHERE assignment__assignmentCategories.assignmentId = assignment.id
-    AND assignment__assignmentCategories.assignmentCategoryTypeId IN (1, 2, 3)
-) AND assignment.id IS NOT NULL
+  SELECT 1 FROM assignments AS assignment
+  WHERE assignment.id = assignment_events.assignmentId
+    AND EXISTS (
+      SELECT 1 FROM assignment_categories AS assignment__assignmentCategories
+      WHERE assignment__assignmentCategories.assignmentId = assignment.id
+        AND assignment__assignmentCategories.assignmentCategoryTypeId IN (1, 2, 3)
+    )
+)
 ```
 
 Relations of the related service are available inside `$some` / `$none` / `$every` too — a belongsTo there is joined **within** the subquery:
@@ -110,9 +113,15 @@ await app.service("assignment-events").find({
 });
 ```
 
-### Semantics of a hasMany behind a belongsTo
+### Filters are semi-joins, never joins
 
-A belongsTo hop is joined with a `LEFT JOIN`, so the adapter adds `<alias>.<key> IS NOT NULL` for the hop. This matters for the negating operators: `{ assignment: { assignmentCategories: { $none: {} } } }` means _"has an assignment, and that assignment has no categories"_ — rows without an assignment at all are **not** returned.
+Every relation filter compiles to `EXISTS`, at every hop and every depth. Three consequences worth knowing:
+
+- **Parent rows are never duplicated.** `$limit`, `$skip` and the paginated `total` stay correct even when a relation declared `asArray: false` points at a non-unique column.
+- **Negation composes.** `$not`, `$none` and `$every` wrap the whole subquery, so there is no join predicate left outside the negation to reason about.
+- **A missing parent excludes the row.** `{ assignment: { assignmentCategories: { $none: {} } } }` reads as _"has an assignment, and that assignment has no categories"_ — a row without an assignment at all does not match, because the outer `EXISTS` is already false.
+
+`$sort` is the exception: ordering by a related column needs the value itself, not just its existence, so it still uses a `LEFT JOIN` (or an aggregate subquery for hasMany). See [Sorting](./sorting).
 
 ## Combining with Other Queries
 

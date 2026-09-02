@@ -101,6 +101,15 @@ function setup() {
         asArray: true,
         databaseTableName: 'users',
       },
+      // Deliberately declared to-one on a NON-unique column: a JOIN would
+      // multiply parent rows here, a semi-join must not.
+      sameAge: {
+        service: 'users',
+        keyHere: 'age',
+        keyThere: 'age',
+        asArray: false,
+        databaseTableName: 'users',
+      },
     },
   })
 
@@ -991,6 +1000,240 @@ describe('relations', () => {
         assert.strictEqual(error.name, 'BadRequest')
         return true
       },
+    )
+  })
+
+  // MARK: relation filters under $not
+
+  it('$not with a belongsTo path', async () => {
+    await seedChain()
+
+    const result = await app.service('todos').find({
+      query: { $not: { 'user.name': 'Alice' }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    // Bob's and Carol's todos, plus the orphan — its NOT EXISTS is true
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Bob todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a multi-level belongsTo path', async () => {
+    await seedChain()
+
+    // NOT (owner's manager is Alice) → everything except Bob's todo
+    const result = await app.service('todos').find({
+      query: { $not: { 'user.manager.name': 'Alice' }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Alice todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with $or over relation paths', async () => {
+    await seedChain()
+
+    const result = await app.service('todos').find({
+      query: {
+        $not: { $or: [{ 'user.name': 'Alice' }, { 'user.name': 'Bob' }] },
+        $sort: { text: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a hasMany behind a belongsTo hop', async () => {
+    await seedChain()
+
+    // NOT (owner has a report named Carol) → everything except Bob's todo
+    const result = await app.service('todos').find({
+      query: {
+        $not: { user: { reports: { $some: { name: 'Carol' } } } },
+        $sort: { text: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Alice todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a hasMany relation', async () => {
+    await seedChain()
+
+    const result = await app.service('users').find({
+      query: {
+        $not: { todos: { $some: { text: 'Alice todo' } } },
+        $sort: { name: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Bob', 'Carol'],
+    )
+  })
+
+  // MARK: relation filters in patch / remove
+
+  it('remove by a belongsTo path (both notations)', async () => {
+    for (const query of [
+      { 'user.name': 'Alice' },
+      { user: { name: 'Alice' } },
+    ]) {
+      await clean()
+      await seedChain()
+
+      const removed = await app.service('todos').remove(null, { query })
+
+      assert.deepStrictEqual(
+        removed.map((todo: any) => todo.text),
+        ['Alice todo'],
+      )
+
+      const left = await app.service('todos').find({ paginate: false })
+      assert.strictEqual(left.length, 3)
+    }
+  })
+
+  it('remove by a multi-level belongsTo path', async () => {
+    await seedChain()
+
+    const removed = await app
+      .service('todos')
+      .remove(null, { query: { 'user.manager.name': 'Alice' } })
+
+    assert.deepStrictEqual(
+      removed.map((todo: any) => todo.text),
+      ['Bob todo'],
+    )
+  })
+
+  it('remove by a hasMany relation', async () => {
+    await seedChain()
+
+    const removed = await app
+      .service('users')
+      .remove(null, { query: { todos: { $some: { text: 'Alice todo' } } } })
+
+    assert.deepStrictEqual(
+      removed.map((user: any) => user.name),
+      ['Alice'],
+    )
+  })
+
+  it('patch by a belongsTo path', async () => {
+    await seedChain()
+
+    const patched = await app
+      .service('todos')
+      .patch(null, { text: 'patched' }, { query: { 'user.name': 'Bob' } })
+
+    assert.deepStrictEqual(
+      patched.map((todo: any) => todo.text),
+      ['patched'],
+    )
+  })
+
+  it('patch by a self-referencing belongsTo path', async () => {
+    await seedChain()
+
+    // The subquery reads the same table the UPDATE writes — fine on postgres
+    // and sqlite; mysql resolves ids with a find first and never gets here.
+    const patched = await app
+      .service('users')
+      .patch(null, { age: 99 }, { query: { 'manager.name': 'Alice' } })
+
+    assert.deepStrictEqual(
+      patched.map((user: any) => user.name),
+      ['Bob'],
+    )
+  })
+
+  it('patch by a hasMany behind a belongsTo hop', async () => {
+    await seedChain()
+
+    const patched = await app
+      .service('todos')
+      .patch(
+        null,
+        { text: 'patched' },
+        { query: { user: { reports: { $some: { name: 'Carol' } } } } },
+      )
+
+    assert.deepStrictEqual(
+      patched.map((todo: any) => todo.text),
+      ['patched'],
+    )
+  })
+
+  // MARK: relation filters never duplicate parent rows
+
+  it('a to-one relation on a non-unique column does not duplicate rows', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` matches two rows for both Alice and Bob. A LEFT JOIN would
+    // return each of them twice and report total 4.
+    const result = await app.service('users').find({
+      query: { 'sameAge.age': 30, $sort: { name: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+
+    const paginated = (await app.service('users').find({
+      query: { 'sameAge.age': 30 },
+      paginate: { default: 10, max: 100 },
+    })) as any
+    assert.strictEqual(paginated.total, 2)
+    assert.strictEqual(paginated.data.length, 2)
+  })
+
+  it('three chained hasMany hops', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app
+      .service('users')
+      .create({ name: 'Bob', managerId: alice.id })
+    const carol = await app
+      .service('users')
+      .create({ name: 'Carol', managerId: bob.id })
+    await app.service('users').create({ name: 'Dave', managerId: carol.id })
+
+    // Alice → Bob → Carol → Dave, three EXISTS deep
+    const result = await app.service('users').find({
+      query: {
+        reports: {
+          $some: {
+            reports: { $some: { reports: { $some: { name: 'Dave' } } } },
+          },
+        },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice'],
     )
   })
 
