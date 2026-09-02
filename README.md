@@ -24,6 +24,23 @@ npm install @fratzinger/feathers-kysely kysely
 `pnpm bench` runs the query benchmarks — see [`bench/README.md`](bench/README.md)
 for the regression workflow.
 
+SQLite runs in memory and needs no setup. For postgres and mysql, put the
+connection details in a gitignored `.env`, which `vite.config.ts` loads via
+`loadEnvFile` before the tests run; anything you leave out falls back to the
+defaults in `test/dialect.ts`.
+
+```ini
+DB = postgres
+POSTGRES_DB = feathers_kysely_test
+POSTGRES_USER = postgres
+POSTGRES_PASSWORD = ""
+```
+
+Quote empty values. `POSTGRES_PASSWORD = ` with nothing after it makes
+`loadEnvFile` treat the *next* line as the value, so that variable is silently
+lost — a missing `POSTGRES_DB` then falls back to the default and the tests
+connect to a different database than the one you configured.
+
 ## License
 
 Copyright (c) 2026 [Feathers contributors](https://github.com/feathersjs/feathers/graphs/contributors)
