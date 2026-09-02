@@ -1379,6 +1379,113 @@ describe('relations', () => {
     )
   })
 
+  it('two $sort keys aggregating the same relation get separate aliases', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      { text: 'a2', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'a1', userId: users[0].id },
+      { text: 'b1', userId: users[1].id },
+    ])
+
+    // Both keys aggregate `todos`; one derived table per key, or the join
+    // aliases collide and the query fails as ambiguous.
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1, 'todos.assigneeId': -1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+  })
+
+  it('$sort through a chain whose first hop is not unique', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 30 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` is not provably unique, `manager` is: the whole chain is
+    // aggregated in one derived table with the second hop joined inside it.
+    const result = await app.service('users').find({
+      query: { $sort: { 'sameAge.manager.name': 1 }, $select: ['id', 'name'] },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 3)
+    // the derived table's columns must not reach the result
+    assert.deepStrictEqual(Object.keys(result[0]).sort(), ['id', 'name'])
+  })
+
+  it('$sort by a belongsTo column of a hasMany relation', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app.service('users').create({ name: 'Bob' })
+
+    // Alice's todo is assigned to Bob, Bob's to Alice
+    await app.service('todos').create([
+      { text: 'a1', userId: alice.id, assigneeId: bob.id },
+      { text: 'b1', userId: bob.id, assigneeId: alice.id },
+    ])
+
+    // Sort users by the name of their todos' assignee → Alice's is 'Bob',
+    // Bob's is 'Alice', so Bob comes first.
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.assignee.name': 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Bob', 'Alice'],
+    )
+  })
+
+  it('a hasMany sort filter accepts operators and relation paths', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app.service('users').create({ name: 'Bob' })
+
+    await app.service('todos').create([
+      { text: 'z-bob', userId: alice.id, assigneeId: bob.id },
+      { text: 'a-alice', userId: alice.id, assigneeId: alice.id },
+      { text: 'm-bob', userId: bob.id, assigneeId: bob.id },
+    ])
+
+    // Every todo is assigned, so Alice aggregates to MIN = 'a-alice'
+    const byOperator = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: { $ne: null } } },
+        } as any,
+      },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      byOperator.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+
+    // Restricted to todos assigned to Bob, Alice aggregates to 'z-bob' and Bob
+    // to 'm-bob', which flips the order. Both users keep a matching todo, so
+    // the result does not depend on how the dialect orders NULLs.
+    const byRelation = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assignee: { name: 'Bob' } } },
+        } as any,
+      },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      byRelation.map((user: any) => user.name),
+      ['Bob', 'Alice'],
+    )
+  })
+
   // MARK: hasMany sort
 
   it('sort by hasMany relation column ascending (MIN)', async () => {

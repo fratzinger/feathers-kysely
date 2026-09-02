@@ -75,7 +75,7 @@ const FILTERS = new Set<string>(['$select', '$sort', '$limit', '$skip'])
 // the service's own table or an explicit `$select`.
 const SORT_KEY = '__fk_sort_key'
 const SORT_VALUE = '__fk_sort_value'
-const SORT_ALIAS_PREFIX = '__fk_sort__'
+const SORT_ALIAS_PREFIX = '__fk_sort_'
 
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
@@ -1145,6 +1145,8 @@ export class KyselyAdapter<
     const sortRefs = new Map<string, string>()
     if (!this.options.relations || !$sort) return { q, sortRefs }
 
+    let derivedCount = 0
+
     for (const key in $sort) {
       if (!key.includes('.')) continue
 
@@ -1189,6 +1191,7 @@ export class KyselyAdapter<
         // At least one hop is not provably unique — aggregate the chain.
         const [first, ...rest] = target.steps
         const result = this.addSortDerivedTable(q, {
+          index: derivedCount++,
           fromTable: first.databaseTableName,
           fromAlias: first.alias,
           groupKey: first.targetKey,
@@ -1235,6 +1238,7 @@ export class KyselyAdapter<
           : undefined
 
       const result = this.addSortDerivedTable(q, {
+        index: derivedCount++,
         fromTable: target.relation.databaseTableName!,
         fromAlias: target.relationKey,
         groupKey: target.relation.keyThere,
@@ -1301,6 +1305,8 @@ export class KyselyAdapter<
   private addSortDerivedTable<Q extends Record<string, any>>(
     q: Q,
     spec: {
+      /** Position among the sort keys that need one, to keep aliases unique. */
+      index: number
       fromTable: string
       fromAlias: string
       groupKey: string
@@ -1312,7 +1318,10 @@ export class KyselyAdapter<
       filterScope?: RelationScope
     },
   ): { q: Q; ref: string } {
-    const derivedAlias = `${SORT_ALIAS_PREFIX}${spec.fromAlias}`
+    // Keyed on the position, not on the relation: two sort keys may aggregate
+    // the same relation (`{ 'todos.text': 1, 'todos.userId': -1 }`) and would
+    // otherwise join two derived tables under one alias.
+    const derivedAlias = `${SORT_ALIAS_PREFIX}${spec.index}__${spec.fromAlias}`
 
     q = q.leftJoin(
       (eb: any) => {

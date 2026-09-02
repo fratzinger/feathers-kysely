@@ -35,7 +35,7 @@ exports[`sql shape > $sort by hasMany column 1`] = `
   "parameters": [
     25,
   ],
-  "sql": "select "assignments".* from "assignments" left join (select "categories"."assignmentId" as "__fk_sort_key", min("categories"."typeId") as "__fk_sort_value" from "categories" as "categories" group by "categories"."assignmentId") as "__fk_sort__categories" on "__fk_sort__categories"."__fk_sort_key" = "assignments"."id" order by "__fk_sort__categories"."__fk_sort_value" asc limit ?",
+  "sql": "select "assignments".* from "assignments" left join (select "categories"."assignmentId" as "__fk_sort_key", min("categories"."typeId") as "__fk_sort_value" from "categories" as "categories" group by "categories"."assignmentId") as "__fk_sort_0__categories" on "__fk_sort_0__categories"."__fk_sort_key" = "assignments"."id" order by "__fk_sort_0__categories"."__fk_sort_value" asc limit ?",
 }
 `;
 
