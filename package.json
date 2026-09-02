@@ -42,6 +42,7 @@
     "build": "tsdown",
     "version": "pnpm build",
     "test": "vitest run",
+    "bench": "vitest bench --run",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint",
     "vitest": "vitest",

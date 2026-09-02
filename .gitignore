@@ -42,3 +42,5 @@ dist/
 # VitePress
 docs/.vitepress/cache
 docs/.vitepress/dist
+# benchmark output (machine-specific)
+bench/*.json

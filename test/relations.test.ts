@@ -101,6 +101,15 @@ function setup() {
         asArray: true,
         databaseTableName: 'users',
       },
+      // Deliberately declared to-one on a NON-unique column: a JOIN would
+      // multiply parent rows here, a semi-join must not.
+      sameAge: {
+        service: 'users',
+        keyHere: 'age',
+        keyThere: 'age',
+        asArray: false,
+        databaseTableName: 'users',
+      },
     },
   })
 
@@ -457,7 +466,7 @@ describe('relations', () => {
 
   // MARK: $some/$none/$every on belongsTo relations
 
-  it('$some/$none/$every on belongsTo relation are not applied', async () => {
+  it('$some/$none/$every on a belongsTo relation throw', async () => {
     const users = await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
@@ -468,72 +477,45 @@ describe('relations', () => {
       { text: 'Todo 2', userId: users[1].id },
     ])
 
-    // `user` is a belongsTo relation (asArray: false)
-    // $some is a collection operator only for hasMany — on belongsTo it falls
-    // through to handleQueryPropertyNormal where it's treated as a column name
-    try {
-      await app.service('todos').find({
-        query: { user: { $some: { name: 'Alice' } } },
-        paginate: false,
-      })
-      // If no error, the operator was silently ignored
-    } catch {
-      // Error is expected — $some is not a valid column on the joined table
-    }
-
-    try {
-      await app.service('todos').find({
-        query: { user: { $none: {} } },
-        paginate: false,
-      })
-    } catch {
-      // Error is expected
-    }
-
-    try {
-      await app.service('todos').find({
-        query: { user: { $every: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error is expected
+    // `user` is a belongsTo relation (asArray: false) — a collection operator
+    // cannot apply to it. Dropping it silently would widen the result set.
+    for (const query of [
+      { user: { $some: { name: 'Alice' } } },
+      { user: { $none: {} } },
+      { user: { $every: { name: 'Alice' } } },
+    ]) {
+      await assert.rejects(
+        () => app.service('todos').find({ query, paginate: false }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          assert.match(error.message, /only valid on a hasMany relation/)
+          return true
+        },
+      )
     }
   })
 
   // MARK: $some/$none/$every on non-existent relations
 
-  it('$some/$none/$every on non-existent relation are not applied', async () => {
+  it('$some/$none/$every on a non-existent relation throw', async () => {
     await app.service('users').create([
       { name: 'Alice', age: 30 },
       { name: 'Bob', age: 25 },
     ])
 
     // `nonExistent` is not a defined relation
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $some: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored — both acceptable
-    }
-
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $none: {} } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored
-    }
-
-    try {
-      await app.service('users').find({
-        query: { nonExistent: { $every: { name: 'Alice' } } },
-        paginate: false,
-      })
-    } catch {
-      // Error or silently ignored
+    for (const query of [
+      { nonExistent: { $some: { name: 'Alice' } } },
+      { nonExistent: { $none: {} } },
+      { nonExistent: { $every: { name: 'Alice' } } },
+    ]) {
+      await assert.rejects(
+        () => app.service('users').find({ query, paginate: false }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          return true
+        },
+      )
     }
   })
 
@@ -819,37 +801,179 @@ describe('relations', () => {
     assert.strictEqual(result[0].text, 'Alice todo')
   })
 
-  it('3-level path with unknown middle segment is silently ignored', async () => {
+  it('3-level path with unknown middle segment throws', async () => {
     await app.service('users').create([{ name: 'Alice' }, { name: 'Bob' }])
     await app.service('todos').create({ text: 'Todo 1', userId: 1 })
 
-    const result = await app.service('todos').find({
-      query: { 'user.bogus.name': 'Alice' },
-      paginate: false,
-    })
-    // Unknown middle segment → resolver returns null, filter is skipped
-    assert.strictEqual(result.length, 1)
+    // The path starts at a declared relation but breaks further along — a
+    // broken chain, not a column.
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { 'user.bogus.name': 'Alice' },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /does not resolve to a column/)
+        return true
+      },
+    )
   })
 
-  it('3-level path through hasMany is silently skipped', async () => {
-    const users = await app
-      .service('users')
-      .create([{ name: 'Alice' }, { name: 'Bob' }])
+  // MARK: relation chains through hasMany
 
-    await app.service('todos').create([
-      { text: 'Alice todo', userId: users[0].id },
-      { text: 'Bob todo', userId: users[1].id },
+  /**
+   * Alice ← Bob ← Carol (manager chain), one todo per user.
+   * Alice.reports = [Bob], Bob.reports = [Carol], Carol.reports = [].
+   * The orphan todo has no user at all, so it also covers the LEFT JOIN
+   * null-protect on a belongsTo hop.
+   */
+  const seedChain = async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app
+      .service('users')
+      .create({ name: 'Bob', managerId: alice.id })
+    const carol = await app
+      .service('users')
+      .create({ name: 'Carol', managerId: bob.id })
+
+    const todos = await app.service('todos').create([
+      { text: 'Alice todo', userId: alice.id, assigneeId: carol.id },
+      { text: 'Bob todo', userId: bob.id },
+      { text: 'Carol todo', userId: carol.id },
+      { text: 'Orphan todo', userId: 9999 },
     ])
 
+    return { alice, bob, carol, todos }
+  }
+
+  it('3-level path through hasMany filters via EXISTS', async () => {
+    await seedChain()
+
+    // users who have at least one todo whose owner is Alice
     const result = await app.service('users').find({
       query: { 'todos.user.name': 'Alice' },
       paginate: false,
     })
-    // hasMany in the middle of a path is out of scope → filter ignored
-    assert.strictEqual(result.length, 2)
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
   })
 
-  it('unresolvable 3-level path inside $or does not leak raw column refs', async () => {
+  it('hasMany behind a belongsTo hop ($some, both notations)', async () => {
+    await seedChain()
+
+    // todos whose owner has a direct report named Carol → Bob's todo
+    for (const query of [
+      { user: { reports: { $some: { name: 'Carol' } } } },
+      { 'user.reports': { $some: { name: 'Carol' } } },
+      { 'user.reports.name': 'Carol' },
+    ]) {
+      const result = await app.service('todos').find({ query, paginate: false })
+      assert.strictEqual(result.length, 1)
+      assert.strictEqual(result[0].text, 'Bob todo')
+    }
+  })
+
+  it('hasMany behind a belongsTo hop ($none) excludes rows without a parent', async () => {
+    await seedChain()
+
+    // todos whose owner has no reports → Carol's todo. The orphan todo must not
+    // slip through: its LEFT JOIN'd user is NULL, so NOT EXISTS would be
+    // vacuously true without the null-protect on the hop.
+    const result = await app.service('todos').find({
+      query: { user: { reports: { $none: {} } } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].text, 'Carol todo')
+  })
+
+  it('belongsTo inside $some joins within the subquery', async () => {
+    await seedChain()
+
+    // users owning at least one todo that is assigned to Carol → Alice
+    for (const query of [
+      { todos: { $some: { assignee: { name: 'Carol' } } } },
+      { todos: { $some: { 'assignee.name': 'Carol' } } },
+      { 'todos.assignee.name': 'Carol' },
+    ]) {
+      const result = await app.service('users').find({ query, paginate: false })
+      assert.strictEqual(result.length, 1)
+      assert.strictEqual(result[0].name, 'Alice')
+    }
+  })
+
+  it('nested hasMany inside $some does not shadow the outer alias', async () => {
+    await seedChain()
+
+    // users with a report that itself has a report named Carol → Alice
+    const result = await app.service('users').find({
+      query: { reports: { $some: { reports: { $some: { name: 'Carol' } } } } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+  })
+
+  it('self-referencing belongsTo inside $some resolves in the child scope', async () => {
+    await seedChain()
+
+    // users with a report whose manager is Alice → Alice herself
+    const result = await app.service('users').find({
+      query: { reports: { $some: { 'manager.name': 'Alice' } } },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'Alice')
+
+    // Bob's reports are managed by Bob, not Alice → no match for Bob
+    const none = await app.service('users').find({
+      query: { reports: { $some: { 'manager.name': 'Nobody' } } },
+      paginate: false,
+    })
+    assert.strictEqual(none.length, 0)
+  })
+
+  it('relation chain combined with $or and a regular filter', async () => {
+    await seedChain()
+
+    const result = await app.service('todos').find({
+      query: {
+        $or: [{ 'user.reports.name': 'Carol' }, { text: 'Orphan todo' }],
+        $sort: { text: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Bob todo', 'Orphan todo'],
+    )
+  })
+
+  it('broken relation chain past a hasMany hop throws', async () => {
+    await seedChain()
+
+    // `bogus` is neither a relation nor a resolvable ref inside the subquery
+    await assert.rejects(
+      () =>
+        app.service('users').find({
+          query: { 'todos.bogus.name': 'Alice' },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        return true
+      },
+    )
+  })
+
+  it('unresolvable 3-level path inside $or throws', async () => {
     const users = await app
       .service('users')
       .create([{ name: 'Alice' }, { name: 'Bob' }])
@@ -858,19 +982,259 @@ describe('relations', () => {
       { text: 'Bob todo', userId: users[1].id },
     ])
 
-    // Both legs of the $or reference a path that cannot be resolved.
-    // Neither must leak into SQL as "a"."b"."c" — otherwise Postgres raises
-    // "missing FROM-clause entry for table ...".
+    // Both legs reference a path that cannot be resolved. Neither may leak
+    // into SQL as "a"."b"."c", and neither may be silently dropped — an $or
+    // whose legs vanish matches every row.
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: {
+            $or: [
+              { 'user.bogus.name': { $iLike: '%Alice%' } },
+              { 'user.bogus.age': { $gt: 0 } },
+            ],
+          },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        return true
+      },
+    )
+  })
+
+  // MARK: relation filters under $not
+
+  it('$not with a belongsTo path', async () => {
+    await seedChain()
+
+    const result = await app.service('todos').find({
+      query: { $not: { 'user.name': 'Alice' }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    // Bob's and Carol's todos, plus the orphan — its NOT EXISTS is true
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Bob todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a multi-level belongsTo path', async () => {
+    await seedChain()
+
+    // NOT (owner's manager is Alice) → everything except Bob's todo
+    const result = await app.service('todos').find({
+      query: { $not: { 'user.manager.name': 'Alice' }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Alice todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with $or over relation paths', async () => {
+    await seedChain()
+
     const result = await app.service('todos').find({
       query: {
-        $or: [
-          { 'user.bogus.name': { $iLike: '%Alice%' } },
-          { 'user.bogus.age': { $gt: 0 } },
-        ],
+        $not: { $or: [{ 'user.name': 'Alice' }, { 'user.name': 'Bob' }] },
+        $sort: { text: 1 },
       },
       paginate: false,
     })
-    assert.strictEqual(result.length, 2)
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a hasMany behind a belongsTo hop', async () => {
+    await seedChain()
+
+    // NOT (owner has a report named Carol) → everything except Bob's todo
+    const result = await app.service('todos').find({
+      query: {
+        $not: { user: { reports: { $some: { name: 'Carol' } } } },
+        $sort: { text: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((todo: any) => todo.text),
+      ['Alice todo', 'Carol todo', 'Orphan todo'],
+    )
+  })
+
+  it('$not with a hasMany relation', async () => {
+    await seedChain()
+
+    const result = await app.service('users').find({
+      query: {
+        $not: { todos: { $some: { text: 'Alice todo' } } },
+        $sort: { name: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Bob', 'Carol'],
+    )
+  })
+
+  // MARK: relation filters in patch / remove
+
+  it('remove by a belongsTo path (both notations)', async () => {
+    for (const query of [
+      { 'user.name': 'Alice' },
+      { user: { name: 'Alice' } },
+    ]) {
+      await clean()
+      await seedChain()
+
+      const removed = await app.service('todos').remove(null, { query })
+
+      assert.deepStrictEqual(
+        removed.map((todo: any) => todo.text),
+        ['Alice todo'],
+      )
+
+      const left = await app.service('todos').find({ paginate: false })
+      assert.strictEqual(left.length, 3)
+    }
+  })
+
+  it('remove by a multi-level belongsTo path', async () => {
+    await seedChain()
+
+    const removed = await app
+      .service('todos')
+      .remove(null, { query: { 'user.manager.name': 'Alice' } })
+
+    assert.deepStrictEqual(
+      removed.map((todo: any) => todo.text),
+      ['Bob todo'],
+    )
+  })
+
+  it('remove by a hasMany relation', async () => {
+    await seedChain()
+
+    const removed = await app
+      .service('users')
+      .remove(null, { query: { todos: { $some: { text: 'Alice todo' } } } })
+
+    assert.deepStrictEqual(
+      removed.map((user: any) => user.name),
+      ['Alice'],
+    )
+  })
+
+  it('patch by a belongsTo path', async () => {
+    await seedChain()
+
+    const patched = await app
+      .service('todos')
+      .patch(null, { text: 'patched' }, { query: { 'user.name': 'Bob' } })
+
+    assert.deepStrictEqual(
+      patched.map((todo: any) => todo.text),
+      ['patched'],
+    )
+  })
+
+  it('patch by a self-referencing belongsTo path', async () => {
+    await seedChain()
+
+    // The subquery reads the same table the UPDATE writes — fine on postgres
+    // and sqlite; mysql resolves ids with a find first and never gets here.
+    const patched = await app
+      .service('users')
+      .patch(null, { age: 99 }, { query: { 'manager.name': 'Alice' } })
+
+    assert.deepStrictEqual(
+      patched.map((user: any) => user.name),
+      ['Bob'],
+    )
+  })
+
+  it('patch by a hasMany behind a belongsTo hop', async () => {
+    await seedChain()
+
+    const patched = await app
+      .service('todos')
+      .patch(
+        null,
+        { text: 'patched' },
+        { query: { user: { reports: { $some: { name: 'Carol' } } } } },
+      )
+
+    assert.deepStrictEqual(
+      patched.map((todo: any) => todo.text),
+      ['patched'],
+    )
+  })
+
+  // MARK: relation filters never duplicate parent rows
+
+  it('a to-one relation on a non-unique column does not duplicate rows', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` matches two rows for both Alice and Bob. A LEFT JOIN would
+    // return each of them twice and report total 4.
+    const result = await app.service('users').find({
+      query: { 'sameAge.age': 30, $sort: { name: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+
+    const paginated = (await app.service('users').find({
+      query: { 'sameAge.age': 30 },
+      paginate: { default: 10, max: 100 },
+    })) as any
+    assert.strictEqual(paginated.total, 2)
+    assert.strictEqual(paginated.data.length, 2)
+  })
+
+  it('three chained hasMany hops', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app
+      .service('users')
+      .create({ name: 'Bob', managerId: alice.id })
+    const carol = await app
+      .service('users')
+      .create({ name: 'Carol', managerId: bob.id })
+    await app.service('users').create({ name: 'Dave', managerId: carol.id })
+
+    // Alice → Bob → Carol → Dave, three EXISTS deep
+    const result = await app.service('users').find({
+      query: {
+        reports: {
+          $some: {
+            reports: { $some: { reports: { $some: { name: 'Dave' } } } },
+          },
+        },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice'],
+    )
   })
 
   it("sort by relation's column", async () => {
@@ -892,6 +1256,234 @@ describe('relations', () => {
 
     assert.strictEqual(todos.length, 3)
     assert.strictEqual(todos[0].userId, users[1].id)
+  })
+
+  // MARK: sorting never duplicates parent rows
+
+  it('$sort by a non-unique to-one column does not duplicate rows', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` is declared to-one on a non-unique column, so a plain JOIN
+    // would return Alice and Bob twice each. The adapter can only prove
+    // uniqueness when `keyThere` is the target's id, so this hop is resolved
+    // through a GROUP BY derived table instead.
+    const result = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(result.map((user: any) => user.name).sort(), [
+      'Alice',
+      'Bob',
+      'Carol',
+    ])
+
+    const paginated = (await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1 } },
+      paginate: { default: 10, max: 100 },
+    })) as any
+    assert.strictEqual(paginated.total, 3)
+    assert.strictEqual(paginated.data.length, 3)
+  })
+
+  it('$sort by a non-unique to-one still orders by the aggregate', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Zoe', age: 40 },
+      { name: 'Yves', age: 40 },
+    ])
+
+    // age 30 aggregates to MIN('Alice','Bob') = 'Alice'
+    // age 40 aggregates to MIN('Yves','Zoe')  = 'Yves'
+    const asc = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': 1, name: 1 } },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      asc.map((user: any) => user.name),
+      ['Alice', 'Bob', 'Yves', 'Zoe'],
+    )
+
+    // descending flips to MAX: age 40 → 'Zoe', age 30 → 'Bob'
+    const desc = await app.service('users').find({
+      query: { $sort: { 'sameAge.name': -1, name: 1 } },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      desc.map((user: any) => user.name),
+      ['Yves', 'Zoe', 'Alice', 'Bob'],
+    )
+  })
+
+  it('$sort by a hasMany relation does not duplicate rows', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    // Alice has three todos — a JOIN would return her three times
+    await app.service('todos').create([
+      { text: 'a1', userId: users[0].id },
+      { text: 'a2', userId: users[0].id },
+      { text: 'a3', userId: users[0].id },
+      { text: 'b1', userId: users[1].id },
+    ])
+
+    const paginated = (await app.service('users').find({
+      query: { $sort: { 'todos.text': 1 } },
+      paginate: { default: 10, max: 100 },
+    })) as any
+
+    assert.strictEqual(paginated.total, 2)
+    assert.deepStrictEqual(
+      paginated.data.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+  })
+
+  it('$sort through a broken relation path throws', async () => {
+    await app.service('users').create({ name: 'Alice' })
+
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { $sort: { 'user.bogus.name': 1 } },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /Invalid \$sort/)
+        return true
+      },
+    )
+  })
+
+  it('$sort by a hasMany behind another relation throws', async () => {
+    await app.service('users').create({ name: 'Alice' })
+
+    await assert.rejects(
+      () =>
+        app.service('todos').find({
+          query: { $sort: { 'user.todos.text': 1 } },
+          paginate: false,
+        }),
+      (error: any) => {
+        assert.strictEqual(error.name, 'BadRequest')
+        assert.match(error.message, /not supported/)
+        return true
+      },
+    )
+  })
+
+  it('two $sort keys aggregating the same relation get separate aliases', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      { text: 'a2', userId: users[0].id, assigneeId: users[1].id },
+      { text: 'a1', userId: users[0].id },
+      { text: 'b1', userId: users[1].id },
+    ])
+
+    // Both keys aggregate `todos`; one derived table per key, or the join
+    // aliases collide and the query fails as ambiguous.
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.text': 1, 'todos.assigneeId': -1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+  })
+
+  it('$sort through a chain whose first hop is not unique', async () => {
+    const alice = await app.service('users').create({ name: 'Alice', age: 30 })
+    await app.service('users').create([
+      { name: 'Bob', age: 30, managerId: alice.id },
+      { name: 'Carol', age: 40 },
+    ])
+
+    // `sameAge` is not provably unique, `manager` is: the whole chain is
+    // aggregated in one derived table with the second hop joined inside it.
+    const result = await app.service('users').find({
+      query: { $sort: { 'sameAge.manager.name': 1 }, $select: ['id', 'name'] },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 3)
+    // the derived table's columns must not reach the result
+    assert.deepStrictEqual(Object.keys(result[0]).sort(), ['id', 'name'])
+  })
+
+  it('$sort by a belongsTo column of a hasMany relation', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app.service('users').create({ name: 'Bob' })
+
+    // Alice's todo is assigned to Bob, Bob's to Alice
+    await app.service('todos').create([
+      { text: 'a1', userId: alice.id, assigneeId: bob.id },
+      { text: 'b1', userId: bob.id, assigneeId: alice.id },
+    ])
+
+    // Sort users by the name of their todos' assignee → Alice's is 'Bob',
+    // Bob's is 'Alice', so Bob comes first.
+    const result = await app.service('users').find({
+      query: { $sort: { 'todos.assignee.name': 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((user: any) => user.name),
+      ['Bob', 'Alice'],
+    )
+  })
+
+  it('a hasMany sort filter accepts operators and relation paths', async () => {
+    const alice = await app.service('users').create({ name: 'Alice' })
+    const bob = await app.service('users').create({ name: 'Bob' })
+
+    await app.service('todos').create([
+      { text: 'z-bob', userId: alice.id, assigneeId: bob.id },
+      { text: 'a-alice', userId: alice.id, assigneeId: alice.id },
+      { text: 'm-bob', userId: bob.id, assigneeId: bob.id },
+    ])
+
+    // Every todo is assigned, so Alice aggregates to MIN = 'a-alice'
+    const byOperator = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: { $ne: null } } },
+        } as any,
+      },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      byOperator.map((user: any) => user.name),
+      ['Alice', 'Bob'],
+    )
+
+    // Restricted to todos assigned to Bob, Alice aggregates to 'z-bob' and Bob
+    // to 'm-bob', which flips the order. Both users keep a matching todo, so
+    // the result does not depend on how the dialect orders NULLs.
+    const byRelation = await app.service('users').find({
+      query: {
+        $sort: {
+          'todos.text': { direction: 1, filter: { assignee: { name: 'Bob' } } },
+        } as any,
+      },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      byRelation.map((user: any) => user.name),
+      ['Bob', 'Alice'],
+    )
   })
 
   // MARK: hasMany sort
@@ -1070,7 +1662,9 @@ describe('relations', () => {
     // With filter assigneeId=1: Alice MIN='Z-task' > Bob MIN='B-task' → Bob first
     const withFilter = await app.service('users').find({
       query: {
-        $sort: { 'todos.text': { direction: 1, filter: { assigneeId: 1 } } } as any,
+        $sort: {
+          'todos.text': { direction: 1, filter: { assigneeId: 1 } },
+        } as any,
       },
       paginate: false,
     })

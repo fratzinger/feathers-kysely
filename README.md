@@ -18,6 +18,22 @@ npm install @fratzinger/feathers-kysely kysely
 
 [Read the full documentation](https://feathers-kysely.fratzinger.workers.dev/)
 
+## Contributing
+
+`pnpm test` runs the suite (`DB=sqlite|postgres|mysql`, see `test/dialect.ts`).
+`pnpm bench` runs the query benchmarks — see [`bench/README.md`](bench/README.md)
+for the regression workflow.
+
+SQLite runs in memory and needs no setup. For postgres and mysql, put the
+connection details in a gitignored `.env`.
+
+```ini
+DB = postgres
+POSTGRES_DB = feathers_kysely_test
+POSTGRES_USER = postgres
+POSTGRES_PASSWORD = ""
+```
+
 ## License
 
 Copyright (c) 2026 [Feathers contributors](https://github.com/feathersjs/feathers/graphs/contributors)

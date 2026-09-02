@@ -1,0 +1,205 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`sql shape > $not with relation path 1`] = `
+{
+  "parameters": [
+    "a-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where not exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > $or over two relation legs 1`] = `
+{
+  "parameters": [
+    "a-1",
+    1,
+    25,
+  ],
+  "sql": "select "events".* from "events" where (exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) or exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and exists (select 1 from "categories" as "assignment__categories" where ("assignment__categories"."assignmentId" = "assignment"."id" and "assignment__categories"."typeId" = ?))))) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > $sort by belongsTo column 1`] = `
+{
+  "parameters": [
+    25,
+  ],
+  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" order by "assignment"."title" asc limit ?",
+}
+`;
+
+exports[`sql shape > $sort by hasMany column 1`] = `
+{
+  "parameters": [
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" left join (select "categories"."assignmentId" as "__fk_sort_key", min("categories"."typeId") as "__fk_sort_value" from "categories" as "categories" group by "categories"."assignmentId") as "__fk_sort_0__categories" on "__fk_sort_0__categories"."__fk_sort_key" = "assignments"."id" order by "__fk_sort_0__categories"."__fk_sort_value" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo 1 hop 1`] = `
+{
+  "parameters": [
+    "a-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo 2 hops 1`] = `
+{
+  "parameters": [
+    "c-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" inner join "customers" as "assignment__customer" on "assignment__customer"."id" = "assignment"."customerId" where ("assignment"."id" = "events"."assignmentId" and "assignment__customer"."fullName" = ?)) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo 3 hops 1`] = `
+{
+  "parameters": [
+    "u-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" inner join "customers" as "assignment__customer" on "assignment__customer"."id" = "assignment"."customerId" inner join "users" as "assignment__customer__owner" on "assignment__customer__owner"."id" = "assignment__customer"."ownerId" where ("assignment"."id" = "events"."assignmentId" and "assignment__customer__owner"."name" = ?)) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo inside $some 1`] = `
+{
+  "parameters": [
+    "t-1",
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" where exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and exists (select 1 from "types" as "categories__type" where ("categories__type"."id" = "categories"."typeId" and "categories__type"."name" = ?)))) order by "assignments"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo nested notation 1`] = `
+{
+  "parameters": [
+    "c-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" inner join "customers" as "assignment__customer" on "assignment__customer"."id" = "assignment"."customerId" where ("assignment"."id" = "events"."assignmentId" and "assignment__customer"."fullName" = ?)) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo then hasMany 1`] = `
+{
+  "parameters": [
+    1,
+    2,
+    3,
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and exists (select 1 from "categories" as "assignment__categories" where ("assignment__categories"."assignmentId" = "assignment"."id" and "assignment__categories"."typeId" in (?, ?, ?))))) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > belongsTo two filters same prefix 1`] = `
+{
+  "parameters": [
+    "a-1",
+    3,
+    25,
+  ],
+  "sql": "select "events".* from "events" where (exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) and exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."number" > ?))) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > filter and sort on the same relation 1`] = `
+{
+  "parameters": [
+    "a-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) order by "assignment"."number" desc limit ?",
+}
+`;
+
+exports[`sql shape > hasMany $every 1`] = `
+{
+  "parameters": [
+    1,
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" where not exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and not "categories"."active" = ?)) order by "assignments"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > hasMany $none 1`] = `
+{
+  "parameters": [
+    1,
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" where not exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and "categories"."active" = ?)) order by "assignments"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > hasMany $some 1`] = `
+{
+  "parameters": [
+    1,
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" where exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and "categories"."typeId" = ?)) order by "assignments"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > hasMany implicit $some via dot path 1`] = `
+{
+  "parameters": [
+    1,
+    25,
+  ],
+  "sql": "select "assignments".* from "assignments" where exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and "categories"."typeId" = ?)) order by "assignments"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > mixed 4 hops via dot path 1`] = `
+{
+  "parameters": [
+    "t-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and exists (select 1 from "categories" as "assignment__categories" where ("assignment__categories"."assignmentId" = "assignment"."id" and exists (select 1 from "types" as "assignment__categories__type" where ("assignment__categories__type"."id" = "assignment__categories"."typeId" and "assignment__categories__type"."name" = ?)))))) order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > nested hasMany two levels 1`] = `
+{
+  "parameters": [
+    50,
+    25,
+  ],
+  "sql": "select "users".* from "users" where exists (select 1 from "customers" as "ownedCustomers" where ("ownedCustomers"."ownerId" = "users"."id" and exists (select 1 from "assignments" as "ownedCustomers__assignments" where ("ownedCustomers__assignments"."customerId" = "ownedCustomers"."id" and "ownedCustomers__assignments"."number" > ?)))) order by "users"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > plain column 1`] = `
+{
+  "parameters": [
+    "e-1",
+    25,
+  ],
+  "sql": "select "events".* from "events" where "events"."name" = ? order by "events"."id" asc limit ?",
+}
+`;
+
+exports[`sql shape > plain column with operator 1`] = `
+{
+  "parameters": [
+    1,
+    2,
+    3,
+    25,
+  ],
+  "sql": "select "events".* from "events" where "events"."assignmentId" in (?, ?, ?) order by "events"."id" asc limit ?",
+}
+`;
