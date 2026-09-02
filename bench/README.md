@@ -15,6 +15,36 @@ This is the cheap, deterministic guard: a change to query building shows up as
 a readable diff instead of as a timing wobble. Review the diff, then accept it
 with `vitest -u`.
 
+## `test/query-costs.test.ts` — what that SQL costs
+
+Wall-clock timings drift a few percent between runs, which drowns out most of
+what is worth catching. Blocks touched and rows returned do not: they are a
+property of the plan and the data, so a 2% change in them is a real change.
+
+```bash
+BENCH_COSTS=1 DB=postgres npx vitest run test/query-costs.test.ts
+```
+
+```
+case                                          blocks  rows  plan
+belongsTo 1 hop                                   27     4  Limit > Sort
+hasMany $some                                     43    25  Limit > Sort
+$sort by hasMany column                           43    25  Limit > Sort
+mixed 4 hops via dot path                        891    25  Limit > Sort
+```
+
+The `rows` column doubles as a correctness signal: a query that starts returning
+a different number of rows shows up here even when it got faster. It also
+catches a case that has stopped exercising anything — a case matching zero rows
+measures nothing.
+
+Record and diff a baseline with `BENCH_COSTS_OUT=<file>` and
+`BENCH_COSTS_BASE=<file>`; the report then adds the previous block count, the
+delta, and flags a changed row count.
+
+Postgres only — `BUFFERS` is postgres syntax. The suite skips the file unless
+`BENCH_COSTS` is set, so `pnpm test` is unaffected.
+
 ## `bench/relations.bench.ts` — how fast that SQL runs
 
 Executes every case against a seeded database.
@@ -73,7 +103,9 @@ this adapter.
 
 Run with `BENCH_INDEXES=1` when you want to see what an index buys a specific
 case — but compare an indexed run against an indexed baseline, never against
-an un-indexed one.
+an un-indexed one. An index does not always help: `mixed 4 hops via dot path`
+goes from 891 to 1958 blocks with indexes on, because the planner switches to an
+index nested loop that touches more of the table than the sequential scan did.
 
 One case is intrinsically quadratic without an index: `$sort by hasMany column`
 compiles to a correlated aggregate subquery evaluated per row, so at the default

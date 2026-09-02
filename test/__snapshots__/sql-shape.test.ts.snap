@@ -175,10 +175,10 @@ exports[`sql shape > mixed 4 hops via dot path 1`] = `
 exports[`sql shape > nested hasMany two levels 1`] = `
 {
   "parameters": [
-    "a-1",
+    50,
     25,
   ],
-  "sql": "select "users".* from "users" where exists (select 1 from "customers" as "ownedCustomers" where ("ownedCustomers"."ownerId" = "users"."id" and exists (select 1 from "assignments" as "ownedCustomers__assignments" where ("ownedCustomers__assignments"."customerId" = "ownedCustomers"."id" and "ownedCustomers__assignments"."title" = ?)))) order by "users"."id" asc limit ?",
+  "sql": "select "users".* from "users" where exists (select 1 from "customers" as "ownedCustomers" where ("ownedCustomers"."ownerId" = "users"."id" and exists (select 1 from "assignments" as "ownedCustomers__assignments" where ("ownedCustomers__assignments"."customerId" = "ownedCustomers"."id" and "ownedCustomers__assignments"."number" > ?)))) order by "users"."id" asc limit ?",
 }
 `;
 

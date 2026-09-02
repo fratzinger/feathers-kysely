@@ -442,10 +442,14 @@ export const QUERY_CASES: QueryCase[] = [
     query: { categories: { $some: { type: { name: 't-1' } } } },
   },
   {
+    // Filters on `number`, not on a single title: a case that matches nothing
+    // measures nothing, and the cost report's `rows` column makes that visible.
     name: 'nested hasMany two levels',
     service: 'users',
     query: {
-      ownedCustomers: { $some: { assignments: { $some: { title: 'a-1' } } } },
+      ownedCustomers: {
+        $some: { assignments: { $some: { number: { $gt: 50 } } } },
+      },
     },
   },
 
