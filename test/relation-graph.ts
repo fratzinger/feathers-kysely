@@ -2,6 +2,7 @@ import type { Generated, Kysely } from 'kysely'
 import { feathers } from '@feathersjs/feathers'
 
 import { KyselyService } from '../src/index.js'
+import { getDialect } from './dialect.js'
 import { addPrimaryKey } from './test-utils.js'
 
 /**
@@ -326,13 +327,20 @@ export const seed = async (db: Kysely<any>, counts = seedCounts()) => {
     })),
   )
 
+  // sqlite cannot bind booleans; postgres will not take 0/1 for a boolean
+  // column. Seed the representation each driver accepts.
+  const bool =
+    getDialect() === 'sqlite'
+      ? (value: boolean) => (value ? 1 : 0)
+      : (value: boolean) => value
+
   await insertChunked(
     db,
     'categories',
     Array.from({ length: counts.categories }, () => ({
       assignmentId: pick(counts.assignments),
       typeId: pick(counts.types),
-      active: random() < 0.5,
+      active: bool(random() < 0.5),
     })),
   )
 
