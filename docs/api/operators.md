@@ -10,10 +10,38 @@ All standard [Feathers query operators](https://feathersjs.com/api/databases/que
 | `$lte`       | `<=`            | Less than or equal                             |
 | `$gt`        | `>`             | Greater than                                   |
 | `$gte`       | `>=`            | Greater than or equal                          |
-| `$in`        | `IN`            | In a list of values                            |
-| `$nin`       | `NOT IN`        | Not in a list of values                        |
+| `$in`        | `IN`            | In a list of values (handles `null`)           |
+| `$nin`       | `NOT IN`        | Not in a list of values (handles `null`)       |
 | `$eq`        | `=` / `IS`      | Equal (handles `null`)                         |
 | `$ne`        | `!=` / `IS NOT` | Not equal (handles `null`)                     |
+
+### `null` inside `$in` / `$nin`
+
+A `null` in the array is a value you can match, as it is in a Feathers/Mongo
+query — not SQL's "never equal to anything". The `null` is lifted out of the
+list and compiled into an explicit `IS NULL` / `IS NOT NULL`:
+
+```ts
+// age IN (1) OR age IS NULL  — matches the 1s and the NULL rows
+await app.service("users").find({ query: { age: { $in: [null, 1] } } });
+
+// age IS NULL
+await app.service("users").find({ query: { age: { $in: [null] } } });
+
+// age NOT IN (2) AND age IS NOT NULL — everything that is neither 2 nor NULL
+await app.service("users").find({ query: { age: { $nin: [null, 2] } } });
+```
+
+Without that lifting a plain `age IN (null, 1)` would silently skip every NULL
+row, and `age NOT IN (null, 2)` would be UNKNOWN for *every* row and match
+nothing at all.
+
+An array **without** a `null` compiles to an untouched `IN` / `NOT IN`, so NULL
+rows stay excluded from `{ age: { $nin: [1] } }` — `age <> 1` is unknown for
+them. Add the `null` explicitly (`$nin: [null, 1]`) to include them.
+
+An empty array keeps its boolean identity: `$in: []` matches nothing, `$nin: []`
+matches everything.
 
 ## Pattern Matching
 

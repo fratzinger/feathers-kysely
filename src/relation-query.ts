@@ -7,6 +7,7 @@ import type { Expression, ExpressionBuilder, SelectQueryBuilder } from 'kysely'
 import type { DialectType, Relation, SortFilter } from './declarations.js'
 import {
   buildBetween,
+  buildIn,
   buildJsonbContainment,
   buildJsonbHasKey,
   buildLikePattern,
@@ -728,14 +729,15 @@ export class RelationQuery {
       for (const operator in queryProperty) {
         const value = (queryProperty as Record<string, any>)[operator]
 
+        // `$in` / `$nin` need a null in the array turned into an explicit
+        // `IS (NOT) NULL`, and an empty array turned into a boolean constant —
+        // plain `IN (null, ...)` / `NOT IN (null, ...)` would silently miss
+        // rows (see `buildIn`).
         if (
           (operator === '$in' || operator === '$nin') &&
-          Array.isArray(value) &&
-          value.length === 0
+          Array.isArray(value)
         ) {
-          qs.push(
-            operator === '$in' ? sql<boolean>`1 = 0` : sql<boolean>`1 = 1`,
-          )
+          qs.push(buildIn(eb, column, operator, value))
           continue
         }
 

@@ -2,3 +2,5 @@ allowBuilds:
   better-sqlite3: true
   esbuild: true
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - feathers-adapter-vitest@0.2.0
