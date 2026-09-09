@@ -1839,4 +1839,83 @@ describe('relations', () => {
     assert.strictEqual(result[0].userId, users[1].id)
     assert.strictEqual(result[1].userId, users[0].id)
   })
+
+  // MARK: null inside $in / $nin on a relation filter
+
+  // The null handling lives in the one expression builder every path goes
+  // through, so it has to hold inside a semi-join EXISTS too — not just on a
+  // plain column.
+  it('$in with a null matches through a belongsTo hop', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: null },
+      { name: 'Carol', age: 40 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: users[0].id },
+      { text: 'Bob todo', userId: users[1].id },
+      { text: 'Carol todo', userId: users[2].id },
+    ])
+
+    const result = await app.service('todos').find({
+      query: { 'user.age': { $in: [null, 30] }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((t) => t.text),
+      ['Alice todo', 'Bob todo'],
+    )
+  })
+
+  it('$nin with a null matches through a belongsTo hop', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: null },
+      { name: 'Carol', age: 40 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'Alice todo', userId: users[0].id },
+      { text: 'Bob todo', userId: users[1].id },
+      { text: 'Carol todo', userId: users[2].id },
+    ])
+
+    // "neither 30 nor NULL" — a plain NOT IN (null, 30) would return nothing.
+    const result = await app.service('todos').find({
+      query: { 'user.age': { $nin: [null, 30] }, $sort: { text: 1 } },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((t) => t.text),
+      ['Carol todo'],
+    )
+  })
+
+  it('$in with a null inside a hasMany $some', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      // Alice has a todo with no assignee at all
+      { text: 'Alice todo', userId: users[0].id, assigneeId: null },
+      { text: 'Bob todo', userId: users[1].id, assigneeId: users[1].id },
+    ])
+
+    const result = await app.service('users').find({
+      query: {
+        todos: { $some: { assigneeId: { $in: [null] } } },
+        $sort: { name: 1 },
+      },
+      paginate: false,
+    })
+
+    assert.deepStrictEqual(
+      result.map((u) => u.name),
+      ['Alice'],
+    )
+  })
 })

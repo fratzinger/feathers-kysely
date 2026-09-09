@@ -46,8 +46,8 @@ importers:
         specifier: ^10.9.1
         version: 10.9.1
       feathers-adapter-vitest:
-        specifier: ^0.1.0
-        version: 0.1.0(@feathersjs/errors@5.0.49)(@feathersjs/feathers@5.0.49)(vitest@4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)))
+        specifier: ^0.2.0
+        version: 0.2.0(@feathersjs/errors@5.0.49)(@feathersjs/feathers@5.0.49)(vitest@4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0)))
       kysely:
         specifier: ^0.29.5
         version: 0.29.5
@@ -1718,8 +1718,8 @@ packages:
       picomatch:
         optional: true
 
-  feathers-adapter-vitest@0.1.0:
-    resolution: {integrity: sha512-A7KRudUlE4kSb5JFWCf1FeMPOqQAQppPYSCHlhyQGKWEKI4Au+UDAhZP4Cm4ROtRfenRTnDO25AxHSR1n+2/UQ==}
+  feathers-adapter-vitest@0.2.0:
+    resolution: {integrity: sha512-sBFSOTcoZps9S/O90oFigi0s+wsH1aBblcuQzHvK4zIcJFPOMysq6LWx5HAveAGTDKe4zq0pZX4JKLWeXBCoZA==}
     engines: {node: '>= 20'}
     peerDependencies:
       '@feathersjs/errors': ^5.0.0
@@ -4231,7 +4231,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.4
 
-  feathers-adapter-vitest@0.1.0(@feathersjs/errors@5.0.49)(@feathersjs/feathers@5.0.49)(vitest@4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0))):
+  feathers-adapter-vitest@0.2.0(@feathersjs/errors@5.0.49)(@feathersjs/feathers@5.0.49)(vitest@4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0))):
     dependencies:
       '@feathersjs/errors': 5.0.49
       '@feathersjs/feathers': 5.0.49

@@ -65,7 +65,7 @@
     "@types/pg": "^8.23.1",
     "better-sqlite3": "^13.0.3",
     "eslint": "^10.9.1",
-    "feathers-adapter-vitest": "^0.1.0",
+    "feathers-adapter-vitest": "^0.2.0",
     "kysely": "^0.29.5",
     "mysql2": "^3.24.2",
     "pg": "^8.23.0",

@@ -234,4 +234,57 @@ describe('query operators (cross-dialect)', () => {
       ).rejects.toMatchObject({ name: 'BadRequest' })
     },
   )
+
+  // MARK: null inside $in / $nin
+  //
+  // Feathers queries are Mongo-shaped, so a `null` inside the array is a value
+  // you can match rather than SQL's "never equal to anything" — `buildIn` lifts
+  // it out of the list into an explicit IS (NOT) NULL.
+  //
+  // The base matrix ($in/$nin with [null] and [null, value], and the empty-array
+  // identities) belongs to the shared adapter suite and runs from there over
+  // every service variant. What is left here is what the shared suite does not
+  // own: the boundaries and the interaction with our own query builder.
+  describe('$in / $nin with a null in the array', () => {
+    beforeEach(async () => {
+      await app.service('users').create([
+        { name: 'one', age: 1 },
+        { name: 'two', age: 2 },
+        { name: 'none', age: null },
+      ])
+    })
+
+    it('repeated nulls behave like a single one', async () => {
+      const res = await app.service('users').find({
+        query: { age: { $in: [null, null, 1] }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(res.map((u) => u.name)).toEqual(['none', 'one'])
+    })
+
+    it('an array without a null is unaffected', async () => {
+      const inRes = await app.service('users').find({
+        query: { age: { $in: [1, 2] }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(inRes.map((u) => u.name)).toEqual(['one', 'two'])
+
+      // NULL rows stay excluded from a plain $nin — `age <> 1` is UNKNOWN for
+      // them, which is both standard SQL and what Mongo does.
+      const ninRes = await app.service('users').find({
+        query: { age: { $nin: [1] }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      expect(ninRes.map((u) => u.name)).toEqual(['two'])
+    })
+
+    it('composes with $not (De Morgan over the null branch)', async () => {
+      // NOT (age = 1 OR age IS NULL) leaves only the 2.
+      const res = await app.service('users').find({
+        query: { $not: { age: { $in: [null, 1] } } },
+        paginate: false,
+      })
+      expect(res.map((u) => u.name)).toEqual(['two'])
+    })
+  })
 })
