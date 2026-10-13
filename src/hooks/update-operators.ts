@@ -4,7 +4,7 @@ import type { HookContext, NextFunction } from '@feathersjs/feathers'
 import type { DialectType } from '../declarations.js'
 import { applyUpdateOperators, containsUpdateOperator } from '../utils/index.js'
 
-// The slice of the Kysely service the hook reads to drive $push/$pull.
+// The slice of the Kysely service the hook reads to drive the array operators.
 interface KyselyUpdateService {
   options?: { dialectType?: DialectType }
   getPropertyType?: (column: string) => string | undefined
@@ -16,9 +16,10 @@ interface KyselyUpdateService {
  *
  * - `$inc` / `$mul` — add / multiply, e.g. `{ $inc: { views: 1 } }`;
  * - `$min` / `$max` — clamp to the smaller / larger value;
- * - `$push` / `$pull` — append to / remove from an array column. The SQL is
- *   chosen per column from its detected storage (native Postgres array vs.
- *   `json`/`jsonb`) and the dialect, via the service's `getPropertyType`.
+ * - `$push` / `$pull` / `$addToSet` — append to / remove from / append-if-missing
+ *   to an array column. The SQL is chosen per column from its detected storage
+ *   (native Postgres array vs. `json`/`jsonb`) and the dialect, via the
+ *   service's `getPropertyType`.
  *
  * Usable as either a `before` hook or an `around` hook — `next` is optional, and
  * when present (around) it is awaited after the data has been transformed:
@@ -51,7 +52,7 @@ export const updateOperators =
         containsUpdateOperator(data as Record<string, any>)
       ) {
         throw new BadRequest(
-          'Update operators ($inc/$mul/$min/$max/$push/$pull) are only supported on patch, not update',
+          'Update operators ($inc/$mul/$min/$max/$push/$pull/$addToSet) are only supported on patch, not update',
         )
       }
     }

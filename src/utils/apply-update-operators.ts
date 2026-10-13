@@ -31,27 +31,30 @@ const NUMERIC_BUILDERS = {
 } as const
 
 // Array operators: handled by buildArrayUpdate (dialect + column-type aware).
-const ARRAY_OPERATORS = ['$push', '$pull'] as const
+const ARRAY_OPERATORS = ['$push', '$pull', '$addToSet'] as const
 
 type NumericOperator = keyof typeof NUMERIC_BUILDERS
 type ArrayOperator = (typeof ARRAY_OPERATORS)[number]
 type UpdateOperator = NumericOperator | ArrayOperator
+
+const isArrayOperator = (op: UpdateOperator): op is ArrayOperator =>
+  (ARRAY_OPERATORS as readonly string[]).includes(op)
 
 export const UPDATE_OPERATOR_KEYS = [
   ...(Object.keys(NUMERIC_BUILDERS) as NumericOperator[]),
   ...ARRAY_OPERATORS,
 ] as UpdateOperator[]
 
-/** True when `data` carries at least one update operator (`$inc`/`$mul`/`$min`/`$max`/`$push`/`$pull`). */
+/** True when `data` carries at least one update operator (`$inc`/`$mul`/`$min`/`$max`/`$push`/`$pull`/`$addToSet`). */
 export const containsUpdateOperator = (data: Record<string, any>): boolean =>
   UPDATE_OPERATOR_KEYS.some((op) => op in data)
 
 export interface ApplyUpdateOperatorsOptions {
-  /** SQL dialect — required for the `$push`/`$pull` array operators. */
+  /** SQL dialect — required for the `$push`/`$pull`/`$addToSet` array operators. */
   dialectType?: DialectType
   /**
-   * Resolve a column's database type (e.g. `'jsonb'`, `'text[]'`) so `$push` /
-   * `$pull` can pick native-array vs. JSON SQL. Typically the adapter's own
+   * Resolve a column's database type (e.g. `'jsonb'`, `'text[]'`) so the array
+   * operators can pick native-array vs. JSON SQL. Typically the adapter's own
    * `getPropertyType`.
    */
   getColumnType?: (column: string) => string | undefined
@@ -66,9 +69,10 @@ export interface ApplyUpdateOperatorsOptions {
  * Supported:
  * - `$inc` (add), `$mul` (multiply), `$min`/`$max` (clamp to the smaller/larger
  *   of the current value and `value`) — portable, no options needed;
- * - `$push`/`$pull` (append to / remove from an array column) — these need
- *   `options.dialectType` and `options.getColumnType` to choose native-array
- *   vs. JSON SQL per column (see {@link buildArrayUpdate}).
+ * - `$push`/`$pull`/`$addToSet` (append to / remove from / append-if-missing
+ *   to an array column) — these need `options.dialectType` and
+ *   `options.getColumnType` to choose native-array vs. JSON SQL per column (see
+ *   {@link buildArrayUpdate}).
  *
  * The resulting per-column factories are passed straight through to Kysely's
  * `.set()` (the adapter never touches function values). A new object is returned
@@ -102,7 +106,7 @@ export function applyUpdateOperators<D extends Record<string, any>>(
     for (const key of Object.keys(values)) {
       const value = (values as Record<string, unknown>)[key]
 
-      if (op === '$push' || op === '$pull') {
+      if (isArrayOperator(op)) {
         if (value === undefined) {
           throw new BadRequest(
             `The value for '${op}.${key}' must not be undefined`,
@@ -251,6 +255,7 @@ if (import.meta.vitest) {
     it('detects operators via containsUpdateOperator', () => {
       expect(containsUpdateOperator({ $inc: { a: 1 } })).toBe(true)
       expect(containsUpdateOperator({ $mul: { a: 1 } })).toBe(true)
+      expect(containsUpdateOperator({ $addToSet: { a: 'x' } })).toBe(true)
       expect(containsUpdateOperator({ a: 1 })).toBe(false)
     })
   })
