@@ -4,3 +4,5 @@ allowBuilds:
   unrs-resolver: true
 minimumReleaseAgeExclude:
   - feathers-adapter-vitest@0.2.0
+  - feathers-utils@10.9.2
+  - mysql2@3.24.6
