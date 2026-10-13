@@ -17,6 +17,9 @@ export type ArrayUpdateOperator = '$push' | '$pull'
  * A scalar `value` appends/removes one element; an array `value` appends each
  * (`$push`) or removes every listed element (`$pull`).
  *
+ * `NULL` follows MongoDB's missing-field rule: `$push` starts a new array,
+ * `$pull` leaves the column `NULL`.
+ *
  * Throws `BadRequest` when the storage can't be determined (no `x-db-type` /
  * `getPropertyType`), when a native-array op is used off Postgres, or when
  * `$pull` targets a JSON column on MySQL/SQLite (not expressible in one
@@ -76,15 +79,17 @@ function buildJsonPush(
   columnType: 'json' | 'jsonb',
   dialectType: DialectType | undefined,
 ): RawBuilder<unknown> {
+  // The JSON append functions of every dialect return NULL for a NULL input,
+  // so start from an empty array instead.
   if (dialectType === 'postgres') {
     // Concat a JSON array literal (one element per item). Going through
     // JSON.stringify preserves each element's JS type, and computing in jsonb +
     // casting back keeps the assignment valid for a `json` column too.
-    return sql`(${ref}::jsonb || ${JSON.stringify(items)}::jsonb)::${sql.raw(columnType)}`
+    return sql`(coalesce(${ref}::jsonb, '[]'::jsonb) || ${JSON.stringify(items)}::jsonb)::${sql.raw(columnType)}`
   }
 
   if (dialectType === 'mysql') {
-    let expr: RawBuilder<unknown> = ref
+    let expr: RawBuilder<unknown> = sql`coalesce(${ref}, json_array())`
     for (const item of items) {
       expr = sql`json_array_append(${expr}, ${'$'}, ${item})`
     }
@@ -94,7 +99,7 @@ function buildJsonPush(
   // sqlite: json_insert appends with the '$[#]' end-of-array path; multiple
   // path/value pairs append several at once.
   const pairs = items.flatMap((item) => [sql`${'$[#]'}`, sql`${item}`])
-  return sql`json_insert(${ref}, ${sql.join(pairs)})`
+  return sql`json_insert(coalesce(${ref}, '[]'), ${sql.join(pairs)})`
 }
 
 function buildJsonPull(
@@ -111,12 +116,13 @@ function buildJsonPull(
   }
 
   const remove = sql`${JSON.stringify(items)}::jsonb`
-  // rebuild the array keeping only elements not present in the remove-set
-  return sql`(
+  // rebuild the array keeping only elements not present in the remove-set;
+  // the CASE keeps a NULL column NULL instead of turning it into `[]`
+  return sql`case when ${ref} is null then null else (
     select coalesce(jsonb_agg(t.v), '[]'::jsonb)
     from jsonb_array_elements(${ref}::jsonb) as t(v)
     where t.v <> all(array(select r.v from jsonb_array_elements(${remove}) as r(v)))
-  )::${sql.raw(columnType)}`
+  )::${sql.raw(columnType)} end`
 }
 
 if (import.meta.vitest) {
@@ -222,7 +228,9 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'jsonb',
         })
-        expect(text).toBe('("tags"::jsonb || $1::jsonb)::jsonb')
+        expect(text).toBe(
+          '(coalesce("tags"::jsonb, \'[]\'::jsonb) || $1::jsonb)::jsonb',
+        )
         expect(parameters).toEqual(['["x"]'])
       })
 
@@ -234,7 +242,9 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'json',
         })
-        expect(text).toBe('("tags"::jsonb || $1::jsonb)::json')
+        expect(text).toBe(
+          '(coalesce("tags"::jsonb, \'[]\'::jsonb) || $1::jsonb)::json',
+        )
         expect(parameters).toEqual(['["a","b"]'])
       })
 
@@ -246,12 +256,13 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'jsonb',
         })
+        expect(text).toMatch(/^case when "tags" is null then null else \(/)
         expect(text).toContain('jsonb_agg(t.v)')
         expect(text).toContain('jsonb_array_elements("tags"::jsonb) as t(v)')
         expect(text).toContain(
           '<> all(array(select r.v from jsonb_array_elements($1::jsonb) as r(v)))',
         )
-        expect(text.trimEnd().endsWith(')::jsonb')).toBe(true)
+        expect(text.trimEnd().endsWith(')::jsonb end')).toBe(true)
         expect(parameters).toEqual(['["x"]'])
       })
     })
@@ -265,7 +276,9 @@ if (import.meta.vitest) {
           dialectType: 'mysql',
           columnType: 'json',
         })
-        expect(text).toBe('json_array_append(`tags`, ?, ?)')
+        expect(text).toBe(
+          'json_array_append(coalesce(`tags`, json_array()), ?, ?)',
+        )
         expect(parameters).toEqual(['$', 'x'])
       })
 
@@ -278,7 +291,7 @@ if (import.meta.vitest) {
           columnType: 'json',
         })
         expect(text).toBe(
-          'json_array_append(json_array_append(`tags`, ?, ?), ?, ?)',
+          'json_array_append(json_array_append(coalesce(`tags`, json_array()), ?, ?), ?, ?)',
         )
         expect(parameters).toEqual(['$', 'a', '$', 'b'])
       })
@@ -291,7 +304,7 @@ if (import.meta.vitest) {
           dialectType: 'sqlite',
           columnType: 'json',
         })
-        expect(text).toBe('json_insert("tags", ?, ?)')
+        expect(text).toBe('json_insert(coalesce("tags", \'[]\'), ?, ?)')
         expect(parameters).toEqual(['$[#]', 'x'])
       })
 
@@ -303,7 +316,7 @@ if (import.meta.vitest) {
           dialectType: 'sqlite',
           columnType: 'json',
         })
-        expect(text).toBe('json_insert("tags", ?, ?, ?, ?)')
+        expect(text).toBe('json_insert(coalesce("tags", \'[]\'), ?, ?, ?, ?)')
         expect(parameters).toEqual(['$[#]', 'a', '$[#]', 'b'])
       })
 

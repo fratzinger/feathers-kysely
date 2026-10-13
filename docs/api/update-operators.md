@@ -105,6 +105,9 @@ await app.service("posts").patch(id, { $pull: { tags: "draft" } });
 await app.service("posts").patch(id, { $pull: { tags: ["draft", "wip"] } });
 ```
 
+A `NULL` column is treated like a missing field in MongoDB: `$push` starts a
+new array, `$pull` leaves it `NULL`.
+
 ### Column type detection
 
 The SQL differs completely between a **native Postgres array** (`text[]`,
