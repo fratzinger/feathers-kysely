@@ -30,7 +30,7 @@ export function traverseJSON(
   for (const key of path.slice(0, -1)) {
     expr = sql`${expr}->${key}`
   }
-  return sql`${expr}->>${path[path.length - 1]}`
+  return sql`${expr}->>${path.at(-1)}`
 }
 
 if (import.meta.vitest) {

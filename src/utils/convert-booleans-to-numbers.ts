@@ -33,7 +33,7 @@ export function convertBooleansToNumbers<T>(data: T): T {
   const result = {} as T
 
   for (const key in data) {
-    if (Object.prototype.hasOwnProperty.call(data, key)) {
+    if (Object.hasOwn(data, key)) {
       const converted = convertBooleansToNumbers(data[key] as any)
       result[key] = converted
 

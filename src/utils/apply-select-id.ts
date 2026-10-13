@@ -1,6 +1,6 @@
 export function applySelectId($select: string[] | undefined, idField: string) {
   if (!$select) return $select
-  return $select.includes(idField) ? $select : $select.concat(idField)
+  return $select.includes(idField) ? $select : [...$select, idField]
 }
 
 if (import.meta.vitest) {

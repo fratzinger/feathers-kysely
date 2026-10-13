@@ -170,25 +170,25 @@ if (import.meta.vitest) {
   describe('applyUpdateOperators', () => {
     it('rewrites $inc into an atomic SET (Postgres)', () => {
       const { sql, parameters } = compile(pg, { $inc: { age: 1 } })
-      expect(sql).toMatch(/set "age" = \(?"age" \+ \$1\)?/)
+      expect(sql).toContain('set "age" = "age" + $1')
       expect(parameters).toEqual([1])
     })
 
     it('rewrites $mul into an atomic SET (Postgres)', () => {
       const { sql, parameters } = compile(pg, { $mul: { price: 2 } })
-      expect(sql).toMatch(/set "price" = \(?"price" \* \$1\)?/)
+      expect(sql).toContain('set "price" = "price" * $1')
       expect(parameters).toEqual([2])
     })
 
     it('binds a negative $inc as a parameter (decrement)', () => {
       const { sql, parameters } = compile(pg, { $inc: { age: -5 } })
-      expect(sql).toMatch(/set "age" = \(?"age" \+ \$1\)?/)
+      expect(sql).toContain('set "age" = "age" + $1')
       expect(parameters).toEqual([-5])
     })
 
     it('compiles on SQLite (standard arithmetic, ? placeholders)', () => {
       const { sql, parameters } = compile(sqlite, { $inc: { age: 1 } })
-      expect(sql).toMatch(/set "age" = \(?"age" \+ \?\)?/)
+      expect(sql).toContain('set "age" = "age" + ?')
       expect(parameters).toEqual([1])
     })
 
@@ -236,7 +236,7 @@ if (import.meta.vitest) {
         "The value for '$inc' must be an object",
       )
       expect(() => applyUpdateOperators({ $inc: [1, 2] as any })).toThrow(
-        /must be an object/,
+        'must be an object',
       )
     })
 
@@ -245,11 +245,11 @@ if (import.meta.vitest) {
         "The value for '$inc.age' must be a finite number",
       )
       expect(() => applyUpdateOperators({ $inc: { age: Number.NaN } })).toThrow(
-        /must be a finite number/,
+        'must be a finite number',
       )
       expect(() =>
         applyUpdateOperators({ $mul: { age: Number.POSITIVE_INFINITY } }),
-      ).toThrow(/must be a finite number/)
+      ).toThrow('must be a finite number')
     })
 
     it('detects operators via containsUpdateOperator', () => {
