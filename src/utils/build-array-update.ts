@@ -281,7 +281,7 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'varchar(255)[]',
         })
-        expect(text).toMatch(/^"tags" \|\| array\(/)
+        expect(text.startsWith('"tags" || array(')).toBe(true)
         expect(text).toContain('unnest(ARRAY[$1, $2]::varchar(255)[])')
         expect(text).toContain('e.x is not distinct from u.x')
         expect(parameters).toEqual(['a', 'b'])
@@ -296,7 +296,7 @@ if (import.meta.vitest) {
             dialectType: 'sqlite',
             columnType: 'text[]',
           }),
-        ).toThrow(/require the postgres dialect/)
+        ).toThrow('require the postgres dialect')
       })
     })
 
@@ -337,7 +337,9 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'jsonb',
         })
-        expect(text).toMatch(/^case when "tags" is null then null else \(/)
+        expect(
+          text.startsWith('case when "tags" is null then null else ('),
+        ).toBe(true)
         expect(text).toContain('jsonb_agg(t.v)')
         expect(text).toContain('jsonb_array_elements("tags"::jsonb) as t(v)')
         expect(text).toContain(
@@ -357,9 +359,9 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: 'json',
         })
-        expect(text).toMatch(
-          /^\(coalesce\("tags"::jsonb, '\[\]'::jsonb\) \|\| /,
-        )
+        expect(
+          text.startsWith('(coalesce("tags"::jsonb, \'[]\'::jsonb) || '),
+        ).toBe(true)
         expect(text).toContain('jsonb_array_elements($1::jsonb)')
         expect(text.trimEnd().endsWith(')::json')).toBe(true)
         expect(parameters).toEqual(['["x"]'])
@@ -387,7 +389,7 @@ if (import.meta.vitest) {
             dialectType: 'mysql',
             columnType: 'json',
           }),
-        ).toThrow(/not supported on the mysql dialect/)
+        ).toThrow('not supported on the mysql dialect')
       })
     })
 
@@ -457,7 +459,7 @@ if (import.meta.vitest) {
               dialectType,
               columnType: 'json',
             }),
-          ).toThrow(/only supported on the postgres dialect/)
+          ).toThrow('only supported on the postgres dialect')
         }
       })
     })
@@ -471,7 +473,7 @@ if (import.meta.vitest) {
           dialectType: 'postgres',
           columnType: undefined,
         }),
-      ).toThrow(/Cannot determine array storage for column 'tags'/)
+      ).toThrow("Cannot determine array storage for column 'tags'")
     })
   })
 }
