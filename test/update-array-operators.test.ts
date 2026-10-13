@@ -108,6 +108,55 @@ describe.skipIf(dialectName !== 'postgres')(
       expect((await read(id)).labels).toEqual(['y', 'z'])
     })
 
+    it('$addToSet adds only missing values to a native text[] column', async () => {
+      const id = await seed(['a', 'b'], [])
+      await app
+        .service('arr_test')
+        .patch(id, { $addToSet: { tags: ['b', 'c', 'c', 'd'] } } as any)
+      expect((await read(id)).tags).toEqual(['a', 'b', 'c', 'd'])
+    })
+
+    it('$addToSet with a value already present is a no-op', async () => {
+      const id = await seed(['a', 'b'], ['x'])
+      await app
+        .service('arr_test')
+        .patch(id, { $addToSet: { tags: 'a', labels: 'x' } } as any)
+      const row = await read(id)
+      expect(row.tags).toEqual(['a', 'b'])
+      expect(row.labels).toEqual(['x'])
+    })
+
+    it('$addToSet ignores NULL elements already in a native array', async () => {
+      const id = await seed(['a', null as any], [])
+      await app
+        .service('arr_test')
+        .patch(id, { $addToSet: { tags: ['b', null] } } as any)
+      expect((await read(id)).tags).toEqual(['a', null, 'b'])
+    })
+
+    it('$addToSet on a jsonb column compares objects exactly', async () => {
+      const id = await seed([], ['x', { k: 1 }])
+      await app.service('arr_test').patch(id, {
+        $addToSet: { labels: ['x', { k: 1 }, { k: 1, j: 2 }, 'y', 'y'] },
+      } as any)
+      expect((await read(id)).labels).toEqual([
+        'x',
+        { k: 1 },
+        { k: 1, j: 2 },
+        'y',
+      ])
+    })
+
+    it('$addToSet on a NULL column starts a new array', async () => {
+      const id = await seed(null, null)
+      await app.service('arr_test').patch(id, {
+        $addToSet: { tags: ['a', 'a'], labels: ['x', 'x'] },
+      } as any)
+      const row = await read(id)
+      expect(row.tags).toEqual(['a'])
+      expect(row.labels).toEqual(['x'])
+    })
+
     it('$push on a NULL column starts a new array', async () => {
       const id = await seed(null, null)
       await app
@@ -212,6 +261,35 @@ describe.skipIf(dialectName !== 'sqlite')(
       await app
         .service('arr_test')
         .patch(id, { $push: { maybe: ['a', 'b'] } } as any)
+      const row = await db
+        .selectFrom('arr_test')
+        .select('maybe')
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow()
+      expect(JSON.parse(row.maybe!)).toEqual(['a', 'b'])
+    })
+
+    it('$addToSet adds only missing values to a JSON array', async () => {
+      const id = await seed(['a', { k: 1 }, true])
+      await app.service('arr_test').patch(id, {
+        $addToSet: { tags: ['a', 'b', 'b', { k: 1 }, { k: 2 }, true, 1] },
+      } as any)
+      // `true` and `1` are different JSON values
+      expect(await readTags(id)).toEqual([
+        'a',
+        { k: 1 },
+        true,
+        'b',
+        { k: 2 },
+        1,
+      ])
+    })
+
+    it('$addToSet on a NULL JSON column starts a new array', async () => {
+      const id = await seed([])
+      await app
+        .service('arr_test')
+        .patch(id, { $addToSet: { maybe: ['a', 'a', 'b'] } } as any)
       const row = await db
         .selectFrom('arr_test')
         .select('maybe')

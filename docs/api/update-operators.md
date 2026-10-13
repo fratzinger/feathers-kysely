@@ -6,14 +6,15 @@ MongoDB-style atomic update operators for `patch`, provided by the
 current value instead of overwriting it, computed in the database in a single
 statement.
 
-| Operator | SQL                            | Description                           |
-| -------- | ------------------------------ | ------------------------------------- |
-| `$inc`   | `col = col + value`            | Increment (or decrement)              |
-| `$mul`   | `col = col * value`            | Multiply                              |
-| `$min`   | `col = least(col, value)`\*    | Keep the smaller of current and value |
-| `$max`   | `col = greatest(col, value)`\* | Keep the larger of current and value  |
-| `$push`  | append to an array column      | Add element(s) to an array            |
-| `$pull`  | remove from an array column    | Remove element(s) from an array       |
+| Operator    | SQL                            | Description                           |
+| ----------- | ------------------------------ | ------------------------------------- |
+| `$inc`      | `col = col + value`            | Increment (or decrement)              |
+| `$mul`      | `col = col * value`            | Multiply                              |
+| `$min`      | `col = least(col, value)`\*    | Keep the smaller of current and value |
+| `$max`      | `col = greatest(col, value)`\* | Keep the larger of current and value  |
+| `$push`     | append to an array column      | Add element(s) to an array            |
+| `$pull`     | remove from an array column    | Remove element(s) from an array       |
+| `$addToSet` | append if not yet present      | Add element(s) an array lacks, once   |
 
 \* `$min` / `$max` compile to a portable `CASE` expression
 (`case when col is null or col > value then value else col end`) rather than
@@ -90,9 +91,10 @@ await app
   .patch(null, { $inc: { loginCount: 1 } }, { query: { active: true } });
 ```
 
-## Array operators (`$push` / `$pull`)
+## Array operators (`$push` / `$pull` / `$addToSet`)
 
-`$push` appends to an array column, `$pull` removes matching elements. A scalar
+`$push` appends to an array column, `$pull` removes matching elements, and
+`$addToSet` appends only the elements the array doesn't contain yet. A scalar
 value affects one element; an array value affects each:
 
 ```ts
@@ -103,10 +105,27 @@ await app.service("posts").patch(id, { $push: { tags: ["sql", "node"] } });
 // remove one value (all occurrences), or several
 await app.service("posts").patch(id, { $pull: { tags: "draft" } });
 await app.service("posts").patch(id, { $pull: { tags: ["draft", "wip"] } });
+
+// tags ["sql"] -> ["sql", "node"]: "sql" is already there, "node" is added once
+await app
+  .service("posts")
+  .patch(id, { $addToSet: { tags: ["sql", "node", "node"] } });
 ```
 
-A `NULL` column is treated like a missing field in MongoDB: `$push` starts a
-new array, `$pull` leaves it `NULL`.
+`$addToSet` keeps the input order, adds each new value only once, and never
+removes duplicates the array already has. Values are compared exactly: on
+`jsonb`, `{ "a": 1 }` and `{ "a": 1, "b": 2 }` are different elements.
+
+A `NULL` column is treated like a missing field in MongoDB: `$push` and
+`$addToSet` start a new array, `$pull` leaves it `NULL`.
+
+::: info Difference from MongoDB
+In MongoDB, an array value pushes the array as **one** nested element, and
+`{ $each: [...] }` appends several. Here an array value always means "each
+element" (like Prisma's `push`), since a nested array can't go into a native
+`text[]` column anyway. For the same reason `$pull` with an array removes each
+value, which MongoDB calls `$pullAll`.
+:::
 
 ### Column type detection
 
@@ -127,15 +146,15 @@ new KyselyService({
 });
 ```
 
-If a column's storage can't be determined, `$push` / `$pull` throw a
+If a column's storage can't be determined, the array operators throw a
 `BadRequest` rather than guessing.
 
 ### Support matrix
 
-| Column storage           | `$push`             | `$pull`             |
-| ------------------------ | ------------------- | ------------------- |
-| Postgres native array    | ✅ Postgres only    | ✅ Postgres only    |
-| `json` / `jsonb`         | ✅ all dialects     | ✅ **Postgres only** |
+| Column storage        | `$push`          | `$pull`              | `$addToSet`                  |
+| --------------------- | ---------------- | -------------------- | ---------------------------- |
+| Postgres native array | ✅ Postgres only | ✅ Postgres only     | ✅ Postgres only             |
+| `json` / `jsonb`      | ✅ all dialects  | ✅ **Postgres only** | ✅ Postgres, SQLite (≥ 3.44) |
 
 - Native array ops use `array_append` / `array_remove` / `||` and exist only on
   PostgreSQL (other dialects throw `BadRequest`).
@@ -143,6 +162,10 @@ If a column's storage can't be determined, `$push` / `$pull` throw a
   MySQL, `json_insert` on SQLite).
 - JSON `$pull` is **Postgres-only** (a `jsonb_agg` filter); on MySQL / SQLite it
   throws `BadRequest`, as it can't be expressed as a single statement.
+- JSON `$addToSet` works on Postgres and SQLite. SQLite rebuilds the array with
+  `json_group_array(... order by ...)`, which needs SQLite 3.44 or newer, and
+  compares elements by their JSON text, so `{"a":1,"b":2}` and `{"b":2,"a":1}`
+  count as different there. On MySQL it throws `BadRequest`.
 
 ## patch only {#patch-only}
 
@@ -158,8 +181,8 @@ Invalid payloads throw a `BadRequest`:
 - the operator value must be an object (`{ $inc: 5 }` is rejected);
 - for `$inc` / `$mul` / `$min` / `$max`, each target value must be a finite
   number (`{ $inc: { age: "x" } }`, `NaN`, and `Infinity` are rejected);
-- for `$push` / `$pull`, the value must be defined, and the column's storage
-  must be detectable (see [above](#column-type-detection)).
+- for `$push` / `$pull` / `$addToSet`, the value must be defined, and the
+  column's storage must be detectable (see [above](#column-type-detection)).
 
 ## TypeScript
 
@@ -174,5 +197,5 @@ await app.service("products").patch(id, { $inc: { stock: -1 } } as any);
 
 `$inc` / `$mul` / `$min` / `$max` work on all dialects (PostgreSQL, MySQL,
 SQLite) — the generated arithmetic / `CASE` is standard SQL, and every value is
-bound as a parameter. `$push` / `$pull` are dialect- and storage-specific; see
-the [support matrix](#support-matrix) above.
+bound as a parameter. `$push` / `$pull` / `$addToSet` are dialect- and
+storage-specific; see the [support matrix](#support-matrix) above.
