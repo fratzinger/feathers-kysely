@@ -617,7 +617,9 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
         },
       })
       b.hooks({
-        around: { create: [withTransaction({ start: false })] },
+        around: {
+          create: [withTransaction({ start: false, nested: 'savepoint' })],
+        },
         after: {
           create: [
             (context) => {
@@ -639,40 +641,56 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
       expect(spy.mock.calls.map(([audit]) => audit.message)).toEqual(['good'])
     })
 
-    it("nested: 'join' undoes nothing on its own: a failure the caller catches keeps what it wrote", async () => {
-      const cross = createCrossApp()
-      const a = cross.service('accounts')
-      const b = cross.service('audit')
-      a.hooks({
-        around: { create: [withTransaction()] },
-        before: {
-          create: [
-            async (context) => {
-              await b
-                .create({ message: 'bad' }, {
-                  transaction: (context.params as any).transaction,
-                } as any)
-                .catch(() => {})
-            },
-          ],
-        },
-      })
-      b.hooks({
-        around: { create: [withTransaction({ nested: 'join' })] },
-        after: {
-          create: [
-            () => {
-              throw new Error('bad audit')
-            },
-          ],
-        },
-      })
+    it.each([
+      ['its hook', { message: 'bad' }],
+      // on PostgreSQL the failed statement aborts the transaction, and a COMMIT
+      // would roll it back without a word
+      ['the database', { message: null }],
+    ])(
+      'a joined call failing in %s, the error caught: the root rolls back rather than commit',
+      async (_, data) => {
+        const cross = createCrossApp()
+        const a = cross.service('accounts')
+        const b = cross.service('audit')
+        a.hooks({
+          around: { create: [withTransaction()] },
+          after: {
+            create: [
+              async (context) => {
+                await b
+                  .create(
+                    data as any,
+                    {
+                      transaction: (context.params as any).transaction,
+                    } as any,
+                  )
+                  .catch(() => {})
+              },
+            ],
+          },
+        })
+        b.hooks({
+          around: { create: [withTransaction()] },
+          after: {
+            create: [
+              () => {
+                throw new Error('bad audit')
+              },
+            ],
+          },
+        })
+        const spy = vi.fn()
+        a.on('created', spy)
 
-      await a.create({ name: 'Joined', balance: 1 })
+        await expect(a.create({ name: 'Joined', balance: 1 })).rejects.toThrow(
+          'rolls back rather than commit',
+        )
 
-      // no savepoint to roll back to: rethrow, so the root rolls back
-      expect(await b.find({ paginate: false })).toHaveLength(1)
-    })
+        expect(spy).not.toHaveBeenCalled()
+        expect(await accounts.find({ paginate: false })).toHaveLength(0)
+        expect(await b.find({ paginate: false })).toHaveLength(0)
+      },
+    )
 
     it("nested: 'join' in a transaction passed in by hand: its event goes out right away", async () => {
       const b = createCrossApp().service('audit')
@@ -694,10 +712,10 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
       expect(await b.find({ paginate: false })).toHaveLength(1)
     })
 
-    it('withTransaction() in a transaction passed in by hand: a savepoint of its own, its event right away', async () => {
+    it("nested: 'savepoint' in a transaction passed in by hand: a savepoint of its own, its event right away", async () => {
       const b = createCrossApp().service('audit')
       b.hooks({
-        around: { create: [withTransaction()] },
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
         after: {
           create: [
             (context) => {
@@ -749,7 +767,7 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
         },
       })
       b.hooks({
-        around: { create: [withTransaction()] },
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
         before: {
           create: [
             async (context) => {
@@ -788,7 +806,7 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
       'reports nested withTransaction() calls run in parallel, and rolls back — %s finishing first',
       async (_, messages) => {
         const { a, b, pending } = createParallelApp(
-          { around: { create: [withTransaction()] } },
+          { around: { create: [withTransaction({ nested: 'savepoint' })] } },
           messages,
         )
 
@@ -829,7 +847,7 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
         },
       })
       b.hooks({
-        around: { create: [withTransaction()] },
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
         after: {
           create: [
             (context) => {
@@ -920,7 +938,7 @@ describe.skipIf(dialectName === 'sqlite')('transactions', () => {
           },
         })
         b.hooks({
-          around: { create: [withTransaction()] },
+          around: { create: [withTransaction({ nested: 'savepoint' })] },
           after: {
             create: [
               async (context) => {
@@ -1244,7 +1262,6 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
     expect(log).toEqual([
       'create',
       'create',
-      'commit:root>sp',
       'commit:root',
       'event:b1',
       'event:b2',
@@ -1316,11 +1333,10 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
 
     await aSvc.create({ a: 1 })
 
-    // b runs first (savepoint), a commits root, then queue flushes b then a
+    // b joins and runs first, a commits root, then queue flushes b then a
     expect(log).toEqual([
       'create', // a.create begins, calls b
       'create', // b.create
-      'commit:root>sp', // b's savepoint commit
       'commit:root', // a's root commit
       'event:b', // flushed in push order (b captured first)
       'event:a',
@@ -1366,7 +1382,6 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
     expect(log).toEqual([
       'create',
       'create',
-      'commit:root>sp', // b's savepoint committed
       'rollback:root', // a rolls back the root => everything discarded
     ])
   })
@@ -1556,7 +1571,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
     b.failCreate = true
 
     for (const name of ['a', 'b', 'c']) {
-      app.service(name).hooks({ around: { create: [withTransaction()] } })
+      app.service(name).hooks({
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
+      })
       app.service(name).on('created', () => log.push(`event:${name}`))
     }
 
@@ -1648,7 +1665,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       await (app.service('b') as any).create({ x: 2 }, nested)
     }
     app.service('a').hooks({ around: { create: [withTransaction()] } })
-    app.service('b').hooks({ around: { create: [withTransaction()] } })
+    app
+      .service('b')
+      .hooks({ around: { create: [withTransaction({ nested: 'savepoint' })] } })
 
     await app.service('a').create({ a: 1 })
 
@@ -1677,7 +1696,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
     app.service('a').hooks({ around: { create: [withTransaction()] } })
-    app.service('b').hooks({ around: { create: [withTransaction()] } })
+    app
+      .service('b')
+      .hooks({ around: { create: [withTransaction({ nested: 'savepoint' })] } })
 
     await expect(app.service('a').create({ a: 1 })).rejects.toThrow(
       'still running',
@@ -1730,7 +1751,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       a.failCreate = !!options.failA
       b.failCreate = !!options.failB
       app.service('a').hooks({ around: { create: [withTransaction()] } })
-      app.service('b').hooks({ around: { create: [withTransaction()] } })
+      app.service('b').hooks({
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
+      })
 
       await app
         .service('a')
@@ -1750,6 +1773,120 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
 
     it('resolves false when the root rolls back after its savepoint was released', async () => {
       expect(await run({ failA: true })).toEqual({ a: false, b: false })
+    })
+  })
+
+  describe('joining by default, rollback-only on failure', () => {
+    /** a → b, b's failure caught by a; `bHook` wraps b. */
+    function setup(bHook = withTransaction()) {
+      const log: string[] = []
+      const a = new StubService(log)
+      const b = new StubService(log)
+      const app = appWith(['a', a], ['b', b])
+      a.onCreate = async (_data, params) => {
+        await (app.service('b') as any)
+          .create({ x: 1 }, { transaction: params.transaction })
+          .catch(() => log.push('caught'))
+      }
+      b.failCreate = true
+      app.service('b').hooks({ around: { create: [bHook] } })
+      app.service('a').on('created', () => log.push('event:a'))
+      return { app, log, a, b }
+    }
+
+    it('a nested call joins the transaction it gets', async () => {
+      const { app, log, a, b } = setup()
+      b.failCreate = false
+      let rootTransaction: unknown
+      let nestedTransaction: unknown
+      const onCreate = a.onCreate!
+      a.onCreate = async (data, params) => {
+        rootTransaction = params.transaction
+        await onCreate(data, params)
+      }
+      b.onCreate = async (_data, params) => {
+        nestedTransaction = params.transaction
+      }
+      app.service('a').hooks({ around: { create: [withTransaction()] } })
+
+      await app.service('a').create({ a: 1 })
+
+      expect(nestedTransaction).toBe(rootTransaction)
+      expect(log).toEqual(['create', 'create', 'commit:root', 'event:a'])
+    })
+
+    it('a joined call failing, the error caught, rolls the root back', async () => {
+      const { app, log } = setup()
+      let committed: Promise<unknown> | undefined
+      app.service('a').hooks({
+        around: {
+          create: [
+            withTransaction(),
+            async (context: HookContext, next: NextFunction) => {
+              committed = (context.params as any).transaction.committed
+              await next()
+            },
+          ],
+        },
+      })
+
+      await expect(app.service('a').create({ a: 1 })).rejects.toThrow(
+        'rolls back rather than commit',
+      )
+
+      expect(await committed).toBe(false)
+      expect(log).toEqual(['create', 'create', 'caught', 'rollback:root'])
+    })
+
+    it('within a savepoint, only the savepoint rolls back — its caller may go on', async () => {
+      const log: string[] = []
+      const a = new StubService(log)
+      const s = new StubService(log)
+      const j = new StubService(log)
+      const app = appWith(['a', a], ['s', s], ['j', j])
+      j.failCreate = true
+      s.onCreate = async (_data, params) => {
+        await (app.service('j') as any)
+          .create({ x: 1 }, { transaction: params.transaction })
+          .catch(() => log.push('caught:j'))
+      }
+      a.onCreate = async (_data, params) => {
+        await (app.service('s') as any)
+          .create({ x: 1 }, { transaction: params.transaction })
+          .catch((error: Error) => log.push(`caught:s ${error.message}`))
+      }
+      app.service('a').hooks({ around: { create: [withTransaction()] } })
+      app.service('s').hooks({
+        around: { create: [withTransaction({ nested: 'savepoint' })] },
+      })
+      app.service('j').hooks({ around: { create: [withTransaction()] } })
+
+      await app.service('a').create({ a: 1 })
+
+      expect(log).toEqual([
+        'create',
+        'create',
+        'create',
+        'caught:j',
+        'rollback:root>sp',
+        expect.stringMatching(/^caught:s .*rolls back rather than commit/),
+        'commit:root',
+      ])
+    })
+
+    it('a legacy root rolls back, too, and only once', async () => {
+      const { app, log } = setup()
+      app.service('a').hooks({
+        before: { create: [trxStart()] },
+        after: { create: [trxCommit()] },
+        error: { create: [trxRollback()] },
+      })
+
+      await expect(app.service('a').create({ a: 1 })).rejects.toThrow(
+        'rolls back rather than commit',
+      )
+
+      expect(log).toEqual(['create', 'create', 'caught', 'rollback:root'])
     })
   })
 })
