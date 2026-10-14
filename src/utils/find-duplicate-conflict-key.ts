@@ -1,3 +1,5 @@
+import { conflictKey } from './conflict-key.js'
+
 /**
  * The first two items sharing a conflict key, as `[earlier, later]` indexes, or
  * `undefined`. An item with a null or missing value in any conflict field has
@@ -11,13 +13,9 @@ export function findDuplicateConflictKey(
   const seen = new Map<string, number>()
 
   for (const [index, item] of items.entries()) {
-    const values = fields.map((field) => item?.[field])
-    if (values.some((value) => value == null)) continue
+    if (fields.some((field) => item?.[field] == null)) continue
 
-    // JSON.stringify can't serialize a bigint on its own
-    const key = JSON.stringify(values, (_key, value) =>
-      typeof value === 'bigint' ? value.toString() : value,
-    )
+    const key = conflictKey(item, fields)
     const first = seen.get(key)
     if (first !== undefined) return [first, index]
     seen.set(key, index)

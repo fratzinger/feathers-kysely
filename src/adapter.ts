@@ -40,6 +40,7 @@ import type {
 import {
   ALL_DIALECTS_OPERATORS,
   applySelectId,
+  conflictKey,
   convertBooleansToNumbers,
   findDuplicateConflictKey,
   getDatabaseDialect,
@@ -480,10 +481,12 @@ export class KyselyAdapter<
 
         if (rows.length > 0) {
           const total = Number(rows[0][PAGINATION_TOTAL_KEY] ?? 0) || 0
-          for (const row of rows) {
-            delete row[PAGINATION_TOTAL_KEY]
-          }
-          return buildResult(total, rows as Result[])
+          // Copies without the total: `delete` would turn every row into a slow
+          // dictionary-mode object, for the hooks and the serialization after.
+          const data = rows.map(
+            ({ [PAGINATION_TOTAL_KEY]: _total, ...row }) => row,
+          )
+          return buildResult(total, data as Result[])
         }
 
         return buildResult(await runCountQuery(), [])
@@ -640,7 +643,9 @@ export class KyselyAdapter<
   }
 
   /**
-   * Build WHERE clause for fetching records by conflict fields
+   * Build WHERE clause for fetching records by conflict fields: `IN` for one
+   * field, a row-value `IN` for several. Never an `OR` per item — SQLite parses
+   * a long `OR` chain into a tree deeper than its limit of 1000.
    */
   private buildWhereForConflictFields(
     selected: SelectQueryBuilder<any, any, any>,
@@ -650,18 +655,28 @@ export class KyselyAdapter<
   ): SelectQueryBuilder<any, any, any> {
     const dataArray = isArray ? (data as Data[]) : [data as Data]
 
-    // Build OR conditions for each data item
-    return selected.where((eb) =>
-      eb.or(
-        dataArray.map((item) =>
-          eb.and(
-            conflictFields.map((field) =>
-              eb(this.col(field as string), '=', item[field as keyof Data]),
-            ),
-          ),
-        ),
-      ),
+    if (dataArray.length === 0) {
+      return selected.where((eb) => eb.or([]))
+    }
+
+    const valuesOf = (item: Data) =>
+      conflictFields.map((field) => item[field as keyof Data])
+
+    if (conflictFields.length === 1) {
+      return selected.where(
+        this.col(conflictFields[0] as string),
+        'in',
+        dataArray.map((item) => valuesOf(item)[0]),
+      )
+    }
+
+    const columns = sql.join(
+      conflictFields.map((field) => sql.ref(this.col(field as string))),
     )
+    const rows = sql.join(
+      dataArray.map((item) => sql`(${sql.join(valuesOf(item))})`),
+    )
+    return selected.where(sql<boolean>`(${columns}) in (${rows})`)
   }
 
   /**
@@ -984,8 +999,7 @@ export class KyselyAdapter<
         .execute()
         .catch(this.handleError)) as any[]
 
-      const keyOf = (row: any) =>
-        JSON.stringify(onConflictFields.map((field) => row[field]))
+      const keyOf = (row: any) => conflictKey(row, onConflictFields as string[])
       const existingKeys = new Set(existingKeyRows.map(keyOf))
 
       if (isArray) {
@@ -1094,15 +1108,14 @@ export class KyselyAdapter<
       if (responseArray.length < dataArray.length) {
         const selected = this.selectFromTable(params, name, $select)
 
-        const matchesConflict = (row: any, item: any) =>
-          onConflictFields.every(
-            (field) =>
-              row[field as keyof Result] === (item[field as keyof Data] as any),
-          )
+        // Looked up by key: a scan per item would be quadratic in the batch.
+        const keyOf = (row: any) =>
+          conflictKey(row, onConflictFields as string[])
 
         // Items that were ignored (already existed) and thus not returned.
+        const returned = new Set(responseArray.map(keyOf))
         const missingItems = dataArray.filter(
-          (item) => !responseArray.some((r) => matchesConflict(r, item)),
+          (item) => !returned.has(keyOf(item)),
         )
 
         if (missingItems.length === 0) {
@@ -1121,8 +1134,11 @@ export class KyselyAdapter<
           .catch(this.handleError)) as Result[]
 
         // Re-order to follow the input order and drop any not found.
+        const existingByKey = new Map(
+          existingRows.map((row) => [keyOf(row), row]),
+        )
         const missingRecords = missingItems
-          .map((item) => existingRows.find((row) => matchesConflict(row, item)))
+          .map((item) => existingByKey.get(keyOf(item)))
           .filter((row): row is Result => !!row)
 
         return [...responseArray, ...missingRecords] as Result[]
