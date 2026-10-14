@@ -1,10 +1,12 @@
 import { createDebug } from '@feathersjs/commons'
+import { GeneralError } from '@feathersjs/errors'
 import type { HookContext, NextFunction } from '@feathersjs/feathers'
-import type { ControlledTransaction, Kysely } from 'kysely'
+import type { ControlledTransaction, Kysely, KyselyPlugin } from 'kysely'
 import type {
   KyselyAdapterParams,
   KyselyAdapterTransaction,
 } from '../declarations.js'
+import { deferEvent } from './defer-event.js'
 
 const debug = createDebug('feathers-kysely-transaction')
 
@@ -17,6 +19,61 @@ export const getKysely = (context: HookContext): Kysely<any> | undefined => {
 }
 
 let savepointSeq = 0
+
+/** Per savepoint: how many events the root had queued when it opened. */
+const queuedBefore = new WeakMap<KyselyAdapterTransaction, number>()
+
+/** Roots whose COMMIT or ROLLBACK went out. */
+const ended = new WeakSet<KyselyAdapterTransaction>()
+
+const PARALLEL_MESSAGE =
+  "withTransaction(): nested calls ran in parallel. Savepoints of one transaction form a stack, so nested calls with savepoints of their own must run one after another — or let the nested services join the transaction: withTransaction({ nested: 'join' })."
+
+const OUTLIVED_MESSAGE =
+  'withTransaction(): a nested call outlived its transaction, which already committed or rolled back. Await every nested call before the call that started the transaction returns.'
+
+const STILL_RUNNING_MESSAGE =
+  'withTransaction(): a nested call is still running, so the transaction rolls back rather than commit what that call wrote so far. Await every nested call before the call that started the transaction returns.'
+
+const rootOf = (
+  transaction: KyselyAdapterTransaction,
+): KyselyAdapterTransaction =>
+  transaction.parent ? rootOf(transaction.parent) : transaction
+
+/**
+ * Throws unless `transaction` may go on: its root still open, its savepoint
+ * still there and the innermost one. Otherwise a call that outlived its root
+ * would write on the released connection — outside any transaction — and one
+ * running in parallel would release or roll back a sibling's savepoint along
+ * with its own.
+ */
+const assertInnermost = (transaction: KyselyAdapterTransaction): void => {
+  const { savepoint, savepoints = [] } = transaction
+  if (
+    ended.has(rootOf(transaction)) ||
+    (savepoint && !savepoints.includes(savepoint))
+  ) {
+    throw new GeneralError(OUTLIVED_MESSAGE)
+  }
+  if (savepoints.at(-1) !== savepoint) {
+    throw new GeneralError(PARALLEL_MESSAGE)
+  }
+}
+
+/**
+ * Refuses every query once the root's COMMIT or ROLLBACK went out. Kysely's own
+ * check flips only once that statement returned, and never for the instances
+ * `savepoint()` returns.
+ */
+const refuseAfterEnd = (root: KyselyAdapterTransaction): KyselyPlugin => ({
+  transformQuery: ({ node }) => {
+    if (ended.has(root)) {
+      throw new GeneralError(OUTLIVED_MESSAGE)
+    }
+    return node
+  },
+  transformResult: async ({ result }) => result,
+})
 
 /**
  * Starts a root transaction (`startTransaction()`) or, when an existing
@@ -34,8 +91,21 @@ const startTransaction = async (
   let savepoint: string | undefined
 
   if (parent) {
+    // a transaction passed in by hand starts the stack
+    parent.savepoints ??= []
+    assertInnermost(parent)
     savepoint = `fk_sp_${++savepointSeq}`
-    trx = await (parent.trx as any).savepoint(savepoint).execute()
+    // claimed before the statement goes out, so a parallel call sees it
+    parent.savepoints.push(savepoint)
+    try {
+      await (parent.trx as any).savepoint(savepoint).execute()
+    } catch (error) {
+      parent.savepoints.pop()
+      throw error
+    }
+    // Not the instance `savepoint()` returns: that one never learns the root
+    // ended. The root's does, and carries the guard of `refuseAfterEnd()`.
+    trx = parent.trx
   } else {
     const db = getKysely(context)
     if (!db) {
@@ -53,18 +123,29 @@ const startTransaction = async (
   if (parent) {
     transaction.parent = parent
     transaction.savepoint = savepoint
-    transaction.committed = parent.committed
+    transaction.savepoints = parent.savepoints
+    if (parent.committed) {
+      // settled on rollback, or once released and the parent committed
+      transaction.committed = new Promise((resolve) => {
+        transaction.resolve = resolve
+      })
+    }
     if (withDeferred) {
       // Share the root's queue so every nesting level pushes into one array.
       transaction.deferredEvents = parent.deferredEvents
+      if (parent.deferredEvents) {
+        queuedBefore.set(transaction, parent.deferredEvents.length)
+      }
     }
   } else {
+    transaction.trx = trx.withPlugin(refuseAfterEnd(transaction))
     transaction.committed = new Promise((resolve) => {
       transaction.resolve = resolve
     })
     if (withDeferred) {
       transaction.deferredEvents = []
     }
+    transaction.savepoints = []
   }
 
   return transaction
@@ -73,25 +154,37 @@ const startTransaction = async (
 const commitTransaction = async (
   transaction: KyselyAdapterTransaction,
 ): Promise<void> => {
-  const { trx, id, savepoint } = transaction
+  const { trx, id, savepoint, savepoints, parent, resolve } = transaction
 
   try {
     if (savepoint) {
+      // releasing an outer savepoint would release an inner one along with it
+      assertInnermost(transaction)
       await (trx as any).releaseSavepoint(savepoint).execute()
+      savepoints!.pop()
     } else {
+      if (savepoints?.length) {
+        throw new GeneralError(STILL_RUNNING_MESSAGE)
+      }
+      ended.add(transaction)
       await trx.commit().execute()
     }
   } catch (error) {
     // A failing COMMIT / RELEASE SAVEPOINT must still release anything awaiting
     // `transaction.committed`, otherwise those awaiters hang forever.
-    if (transaction.resolve) {
-      transaction.resolve(false)
+    if (resolve) {
+      resolve(false)
     }
     throw error
   }
 
-  if (transaction.resolve) {
-    transaction.resolve(true)
+  if (resolve) {
+    if (parent?.committed) {
+      // a released savepoint commits only along with its parent
+      void parent.committed.then((isCommitted) => resolve(!!isCommitted))
+    } else {
+      resolve(true)
+    }
   }
 
   // NOTE: deferred events are intentionally NOT flushed here. The caller flushes
@@ -105,12 +198,22 @@ const commitTransaction = async (
 const rollbackTransaction = async (
   transaction: KyselyAdapterTransaction,
 ): Promise<void> => {
-  const { trx, id, savepoint } = transaction
+  const { trx, id, savepoint, savepoints } = transaction
 
   try {
     if (savepoint) {
-      await (trx as any).rollbackToSavepoint(savepoint).execute()
+      // Gone already when an outer savepoint or the root rolled back, taking
+      // this one along. Otherwise the database drops every savepoint opened
+      // after it, too.
+      const index = savepoints!.lastIndexOf(savepoint)
+      if (index !== -1) {
+        savepoints!.length = index
+        if (!ended.has(rootOf(transaction))) {
+          await (trx as any).rollbackToSavepoint(savepoint).execute()
+        }
+      }
     } else {
+      ended.add(transaction)
       await trx.rollback().execute()
     }
   } finally {
@@ -123,6 +226,13 @@ const rollbackTransaction = async (
     // Only the root owns the queue; discard everything that was deferred.
     if (!transaction.parent && transaction.deferredEvents) {
       transaction.deferredEvents.length = 0
+    }
+
+    // A savepoint takes the events of the calls within it along — the root may
+    // still commit.
+    const before = queuedBefore.get(transaction)
+    if (transaction.deferredEvents && before !== undefined) {
+      transaction.deferredEvents.length = before
     }
   }
 
@@ -207,13 +317,33 @@ export const trxRollback = () => async (context: HookContext) => {
 
 const MUTATING_METHODS = new Set(['create', 'update', 'patch', 'remove'])
 
+export type WithTransactionOptions = {
+  /**
+   * Without a transaction: start one (default), or run without one — for a
+   * service only ever called within another call's transaction.
+   *
+   * @default true
+   */
+  start?: boolean
+  /**
+   * Within a transaction (a call forwarding `params.transaction`): a savepoint
+   * of its own (default) — a failure rolls back only this call, but nested calls
+   * can't run in parallel — or `join` it: parallel-safe, and a failure aborts
+   * the whole transaction. Either way the call's event waits for the root's
+   * commit.
+   *
+   * @default 'savepoint'
+   */
+  nested?: 'savepoint' | 'join'
+}
+
 /**
  * Around hook that wraps a service method in a Kysely `ControlledTransaction`:
  * start → commit on success → rollback on error. Nested calls that forward
- * `params.transaction` automatically use savepoints. Feathers service events
- * (`created`/`updated`/`patched`/`removed`) are deferred and only emitted once
- * the root transaction commits — and discarded on rollback — including events
- * from nested cross-service calls.
+ * `params.transaction` use savepoints, or join it (`nested: 'join'`). Feathers
+ * service events (`created`/`updated`/`patched`/`removed`) are deferred and only
+ * emitted once the root transaction commits — and discarded on rollback —
+ * including events from nested cross-service calls.
  *
  * Register per method (`around: { create: [withTransaction()] }`) or, for full
  * cross-service deferral, app-wide (`app.hooks({ around: [withTransaction()] })`).
@@ -221,7 +351,7 @@ const MUTATING_METHODS = new Set(['create', 'update', 'patch', 'remove'])
  * any non-Kysely / transaction-incapable service is a transparent passthrough.
  */
 export const withTransaction =
-  () =>
+  (options?: WithTransactionOptions) =>
   async (context: HookContext, next: NextFunction): Promise<void> => {
     if (!MUTATING_METHODS.has(context.method)) {
       await next()
@@ -229,6 +359,18 @@ export const withTransaction =
     }
 
     const parent = (context.params as KyselyAdapterParams).transaction
+
+    if (parent && options?.nested === 'join') {
+      await next()
+      deferEvent(context, parent)
+      return
+    }
+
+    if (!parent && options?.start === false) {
+      await next()
+      return
+    }
+
     const transaction = await startTransaction(context, true)
 
     if (!transaction) {
@@ -242,28 +384,11 @@ export const withTransaction =
     try {
       await next()
 
-      // Capture this call's pending event into the shared root queue and
-      // suppress the outer Feathers `eventHook` so nothing is emitted before
-      // the root commits. Mirrors @feathersjs/feathers/lib/events.js exactly.
-      const self = context.self
-      const event = context.event
-      if (typeof event === 'string' && transaction.deferredEvents) {
-        // Mirrors @feathersjs/feathers' eventHook: skip the default emit when the
-        // service declares this event itself. We read `self.events` directly instead
-        // of `getServiceOptions()` to avoid a value import of the CJS-only
-        // @feathersjs/feathers, which breaks our ESM consumers.
-        const events: string[] = (self as any).events ?? []
-        if (!events.includes(event)) {
-          const results = Array.isArray(context.result)
-            ? context.result
-            : [context.result]
-          for (const element of results) {
-            transaction.deferredEvents.push(() =>
-              self.emit(event, element, context),
-            )
-          }
-        }
-        context.event = null
+      // The call that started the root leaves its event to Feathers, which
+      // emits it once every hook of the call is done — after the commit, and
+      // not at all after a rollback.
+      if (parent) {
+        deferEvent(context, transaction)
       }
 
       context.params = { ...context.params, transaction: parent }
@@ -276,10 +401,6 @@ export const withTransaction =
         debug('rollback after error failed %o', rollbackError)
       }
       throw error
-    } finally {
-      if ((context.params as KyselyAdapterParams).transaction === transaction) {
-        context.params = { ...context.params, transaction: parent }
-      }
     }
 
     // Reached only on the success path (the catch above rethrows). Emit the

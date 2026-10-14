@@ -22,6 +22,9 @@ describe('exports', () => {
         'trxStart',
         'withTransaction',
 
+        // hooks/after-commit.ts
+        'afterCommit',
+
         // hooks/update-operators.ts
         'updateOperators',
       ].sort(),

@@ -41,6 +41,7 @@ import {
   ALL_DIALECTS_OPERATORS,
   applySelectId,
   convertBooleansToNumbers,
+  findDuplicateConflictKey,
   getDatabaseDialect,
   NON_SQLITE_OPERATORS,
   OPERATORS,
@@ -887,6 +888,21 @@ export class KyselyAdapter<
     } = (params as { kysely?: KyselyParams<Result> }).kysely ?? {}
 
     const hasConflictHandling = onConflictFields.length > 0
+
+    // One statement can't write a row twice: Postgres rejects a merge, SQLite
+    // merges row by row, and an ignore returns one result for two items.
+    if (isArray && hasConflictHandling) {
+      const duplicate = findDuplicateConflictKey(
+        _data as Record<string, unknown>[],
+        onConflictFields as string[],
+      )
+      if (duplicate) {
+        throw new BadRequest(
+          `Can not create items ${duplicate[0]} and ${duplicate[1]} in one call: they share the conflict key (${onConflictFields.join(', ')})`,
+          { onConflictFields, items: duplicate },
+        )
+      }
+    }
     // `returning: false` forces the no-return path, overriding onConflictReturning.
     const returningMode = !wantReturn
       ? 'none'

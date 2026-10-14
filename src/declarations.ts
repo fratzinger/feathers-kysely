@@ -73,6 +73,11 @@ export interface KyselyAdapterTransaction {
    * transactions; root transactions commit/rollback the whole transaction.
    */
   savepoint?: string
+  /**
+   * Settles with `true` once the call's changes are committed — for a savepoint
+   * once it was released and its parent committed — or with `false` on a
+   * rollback. Undefined for a transaction passed in by hand.
+   */
   committed?: Promise<boolean | undefined>
   resolve?: (value: boolean) => void
   /**
@@ -82,6 +87,12 @@ export interface KyselyAdapterTransaction {
    * `trxStart()` transactions (no deferral).
    */
   deferredEvents?: Array<() => void>
+  /**
+   * Root-scoped stack of the open savepoints, innermost last. A nested call may
+   * open a savepoint only on top of its parent's, so `withTransaction()` rejects
+   * nested calls running in parallel instead of failing in the database.
+   */
+  savepoints?: string[]
 }
 
 /**
