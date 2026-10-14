@@ -312,6 +312,65 @@ describe('create with params.kysely conflict handling', () => {
     )
   })
 
+  // SQLite parses a long `OR` chain as a tree, and limits its depth to 1000
+  describe('large batches, most rows existing', () => {
+    const existing = 1200
+    const batch = 1500
+
+    it('ignores the existing rows and returns every row', async () => {
+      const rows = Array.from({ length: batch }, (_, i) => ({
+        sku: `B-${i}`,
+        name: `Bulk ${i}`,
+        price: i,
+      }))
+      await app.service('products').create(rows.slice(0, existing))
+
+      const result = (await app.service('products').create(rows, {
+        kysely: { onConflictFields: ['sku'], onConflictAction: 'ignore' },
+      })) as Product[]
+
+      expect(result.map((product) => product.sku).sort()).toEqual(
+        rows.map((row) => row.sku).sort(),
+      )
+    })
+
+    it.each(['ignore', 'merge'] as const)(
+      'with a composite conflict key (%s)',
+      async (onConflictAction) => {
+        const textType = dialectType === 'mysql' ? 'varchar(255)' : 'text'
+        await db.schema.dropTable('variants').ifExists().execute()
+        await addPrimaryKey(
+          db.schema
+            .createTable('variants')
+            .addColumn('shop', textType, (col) => col.notNull())
+            .addColumn('sku', textType, (col) => col.notNull())
+            .addColumn('stock', 'integer')
+            .addUniqueConstraint('variants_shop_sku', ['shop', 'sku']),
+          'id',
+        ).execute()
+        const variants = new KyselyService<any>({
+          Model: db,
+          name: 'variants',
+          multi: true,
+        })
+        const rows = Array.from({ length: batch }, (_, i) => ({
+          shop: `shop-${i % 3}`,
+          sku: `V-${i}`,
+          stock: i,
+        }))
+        await variants.create(rows.slice(0, existing))
+
+        const result = (await variants.create(rows, {
+          kysely: { onConflictFields: ['shop', 'sku'], onConflictAction },
+        } as any)) as any[]
+
+        const keyOf = (row: any) => `${row.shop}/${row.sku}`
+        expect(result.map(keyOf).sort()).toEqual(rows.map(keyOf).sort())
+        await db.schema.dropTable('variants').execute()
+      },
+    )
+  })
+
   describe('feathers events (the reason to prefer create over upsert)', () => {
     it('emits "created" when inserting via create + conflict options', async () => {
       const events: Product[] = []
