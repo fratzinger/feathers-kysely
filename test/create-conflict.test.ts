@@ -287,6 +287,29 @@ describe('create with params.kysely conflict handling', () => {
       })
       expect(bySku['M-011']).toMatchObject({ name: 'Fresh', price: 20 })
     })
+
+    it.each(['ignore', 'merge'] as const)(
+      'rejects two rows for the same conflict key in one batch (%s), writing nothing',
+      async (onConflictAction) => {
+        await expect(
+          app.service('products').create(
+            [
+              { sku: 'D-001', name: 'First', price: 10 },
+              { sku: 'D-002', name: 'Other', price: 20 },
+              { sku: 'D-001', name: 'Second', price: 30 },
+            ],
+            { kysely: { onConflictFields: ['sku'], onConflictAction } },
+          ),
+        ).rejects.toMatchObject({
+          name: 'BadRequest',
+          message: expect.stringContaining('items 0 and 2'),
+        })
+
+        expect(await app.service('products').find({ paginate: false })).toEqual(
+          [],
+        )
+      },
+    )
   })
 
   describe('feathers events (the reason to prefer create over upsert)', () => {

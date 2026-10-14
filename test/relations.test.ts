@@ -464,6 +464,28 @@ describe('relations', () => {
     assert.strictEqual(result[0].name, 'Charlie')
   })
 
+  it('query for hasMany with several collection operators on one relation', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }, { name: 'Charlie' }])
+
+    await app.service('todos').create([
+      { text: 'shop', userId: users[0].id },
+      { text: 'cook', userId: users[0].id },
+      { text: 'shop', userId: users[1].id },
+    ])
+
+    // Both must hold: Alice cooks, Charlie has no todos at all
+    const result = await app.service('users').find({
+      query: { todos: { $some: { text: 'shop' }, $none: { text: 'cook' } } },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      result.map((user) => user.name),
+      ['Bob'],
+    )
+  })
+
   // MARK: $some/$none/$every on belongsTo relations
 
   it('$some/$none/$every on a belongsTo relation throw', async () => {
@@ -819,6 +841,37 @@ describe('relations', () => {
         return true
       },
     )
+  })
+
+  it('3-level path that starts at no relation throws instead of matching every row', async () => {
+    await app.service('users').create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    // Neither a relation chain nor JSON traversal: dropping it would widen the
+    // result set to every row.
+    for (const query of [
+      { 'bogus.deeper.name': 'Alice' },
+      { reports: { $some: { 'bogus.deeper.name': 'Alice' } } },
+    ]) {
+      await assert.rejects(
+        () => app.service('users').find({ query, paginate: false }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          assert.match(error.message, /does not resolve to a column/)
+          return true
+        },
+      )
+    }
+  })
+
+  it('3-level path that starts at no relation, with an empty condition, is a no-op', async () => {
+    await app.service('users').create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    const result = await app.service('users').find({
+      query: { 'bogus.deeper.name': {} },
+      paginate: false,
+    })
+
+    assert.strictEqual(result.length, 2)
   })
 
   // MARK: relation chains through hasMany
@@ -1258,6 +1311,40 @@ describe('relations', () => {
     assert.strictEqual(todos[0].userId, users[1].id)
   })
 
+  it('sort by two columns of one relation, and filter by it, joins it once', async () => {
+    const users = await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Bob', age: 30 },
+      { name: 'Carol', age: 25 },
+    ])
+
+    await app.service('todos').create([
+      { text: 'alice', userId: users[0].id },
+      { text: 'bob', userId: users[1].id },
+      { text: 'carol', userId: users[2].id },
+    ])
+
+    const $sort = { 'user.age': -1, 'user.name': -1 }
+
+    const sorted = await app.service('todos').find({
+      query: { $sort },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      sorted.map((todo) => todo.text),
+      ['bob', 'alice', 'carol'],
+    )
+
+    const filtered = await app.service('todos').find({
+      query: { 'user.age': 30, $sort },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      filtered.map((todo) => todo.text),
+      ['bob', 'alice'],
+    )
+  })
+
   // MARK: sorting never duplicates parent rows
 
   it('$sort by a non-unique to-one column does not duplicate rows', async () => {
@@ -1377,6 +1464,25 @@ describe('relations', () => {
         return true
       },
     )
+  })
+
+  it('$sort by a hasMany that does not end on a column throws', async () => {
+    await app.service('users').create({ name: 'Alice' })
+
+    for (const key of ['todos.user', 'todos.bogus.name']) {
+      await assert.rejects(
+        () =>
+          app.service('users').find({
+            query: { $sort: { [key]: 1 } },
+            paginate: false,
+          }),
+        (error: any) => {
+          assert.strictEqual(error.name, 'BadRequest')
+          assert.match(error.message, /does not resolve to a column of 'todos'/)
+          return true
+        },
+      )
+    }
   })
 
   it('two $sort keys aggregating the same relation get separate aliases', async () => {

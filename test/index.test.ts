@@ -279,5 +279,20 @@ describe('Feathers Kysely Service', () => {
       expect(result4[2].name).toBe('Alice')
       expect(result4[3].name).toBe('Charlie')
     })
+
+    it('requires a Kysely instance and a table name', () => {
+      expect(() => new KyselyService({} as any)).toThrow(
+        'You must provide a Kysely instance to the `Model` option',
+      )
+      expect(() => new KyselyService({ Model: db } as any)).toThrow(
+        'No table name specified.',
+      )
+    })
+
+    it('update(null) is rejected — multiple records are patched, not replaced', async () => {
+      await expect(
+        app.service('people').update(null as any, { name: 'Nobody' }),
+      ).rejects.toMatchObject({ name: 'BadRequest' })
+    })
   })
 })

@@ -222,9 +222,24 @@ describe('params.kysely.returning: false', () => {
     })
 
     it('single no-op patch (empty data) still throws NotFound for a missing id', async () => {
-      await expect(
-        service().patch(999999, {}, noReturn),
-      ).rejects.toMatchObject({ name: 'NotFound' })
+      await expect(service().patch(999999, {}, noReturn)).rejects.toMatchObject(
+        { name: 'NotFound' },
+      )
+    })
+
+    it('no-op patch (empty data) resolves to undefined / [] for existing rows', async () => {
+      const created = await service().create({
+        sku: 'P-NOOP',
+        name: 'Untouched',
+        price: 10,
+        stock: 1,
+      })
+
+      expect(await service().patch(created.id, {}, noReturn)).toBeUndefined()
+      expect(await service().patch(null, {}, noReturn)).toEqual([])
+
+      const rows = (await service().find({})) as Product[]
+      expect(rows).toEqual([created])
     })
 
     it("emits 'patched' with undefined payload", async () => {
@@ -275,7 +290,11 @@ describe('params.kysely.returning: false', () => {
 
     it('throws NotFound when the id does not exist', async () => {
       await expect(
-        service().update(999999, { sku: 'X', name: 'X', price: 1 } as any, noReturn),
+        service().update(
+          999999,
+          { sku: 'X', name: 'X', price: 1 } as any,
+          noReturn,
+        ),
       ).rejects.toMatchObject({ name: 'NotFound' })
     })
   })
@@ -300,9 +319,9 @@ describe('params.kysely.returning: false', () => {
     })
 
     it('single throws NotFound when the id does not exist', async () => {
-      await expect(
-        service().remove(999999, noReturn),
-      ).rejects.toMatchObject({ name: 'NotFound' })
+      await expect(service().remove(999999, noReturn)).rejects.toMatchObject({
+        name: 'NotFound',
+      })
     })
 
     it('multi resolves to [] but deletes every matching row', async () => {

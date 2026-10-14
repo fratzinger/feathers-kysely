@@ -371,8 +371,6 @@ export class RelationQuery {
       aliasChain.push(key)
       const alias = aliasChain.join('__')
 
-      if (steps.some((step) => step.alias === alias)) return null
-
       steps.push({
         relation,
         alias,
@@ -387,44 +385,6 @@ export class RelationQuery {
     }
 
     return null
-  }
-
-  /**
-   * Resolve a dot-path to a (joined) column. Used by the JOIN passes and by
-   * `$sort`, which can only order by a column — a path through a hasMany or one
-   * ending on a relation resolves to `null` here.
-   */
-  private resolveRelationPath(
-    parts: string[],
-    scope?: RelationScope,
-  ): {
-    steps: JoinStep[]
-    columnAlias: string
-    columnName: string
-    isSimpleColumn: boolean
-  } | null {
-    if (!parts.length) return null
-
-    const currentScope = scope ?? this.rootScope()
-
-    if (parts.length === 1) {
-      return {
-        steps: [],
-        columnAlias: currentScope.alias,
-        columnName: parts[0],
-        isSimpleColumn: true,
-      }
-    }
-
-    const target = this.walkRelationPath(parts, currentScope)
-    if (!target || target.kind !== 'column') return null
-
-    return {
-      steps: target.steps,
-      columnAlias: target.columnAlias,
-      columnName: target.columnName,
-      isSimpleColumn: target.steps.length === 0,
-    }
   }
 
   /**
@@ -920,8 +880,6 @@ export class RelationQuery {
       const agg = this.sortAggregate($sort[key])
 
       if (target.kind === 'column') {
-        if (target.steps.length === 0) continue
-
         if (target.steps.every((step) => this.isProvablyUniqueToOne(step))) {
           for (const step of target.steps) {
             if (options.alreadyJoined.includes(step.alias)) continue
@@ -1131,21 +1089,15 @@ export class RelationQuery {
     }
 
     const scope = options?.scope
-    // A `tableName` without a scope is the legacy nested-belongsTo context: we
-    // know which table the columns belong to, but not its relations, so
-    // relation paths cannot be resolved there.
-    const isLegacyScope = !scope && !!options?.tableName
 
-    if (!isLegacyScope) {
-      const relation = this.handleRelation(
-        eb,
-        queryKey,
-        queryProperty,
-        scope ?? this.rootScope(),
-      )
+    const relation = this.handleRelation(
+      eb,
+      queryKey,
+      queryProperty,
+      scope ?? this.rootScope(),
+    )
 
-      if (relation) return relation
-    }
+    if (relation) return relation
 
     // JSON traversal reads this service's column types and qualifies with its
     // table, so it only applies to the service's own row source.
@@ -1155,22 +1107,27 @@ export class RelationQuery {
       if (json) return json
     }
 
-    // Unresolved dot-paths must not leak into WHERE as raw column refs.
-    // A path reaches this point only if none of the handlers above claimed
-    // it. We skip it when either:
-    //   - the first segment matches a known relation (broken chain, e.g.
-    //     'user.bogus.name'), or
-    //   - the path has 2+ separators (multi-segment paths are only valid
-    //     as relation chains or JSON access, both of which would have been
-    //     caught above; anything else is almost certainly unintended).
-    // Single-dot paths whose first segment is NOT a known relation are
-    // left alone — they may be legitimate qualified refs like
-    // `alias.column` added by addToQuery null-protect on a prior hop.
+    // Unresolved dot-paths must not leak into WHERE as raw column refs. A path
+    // reaches this point only if none of the handlers above claimed it:
+    //   - one with 2+ separators is neither a relation chain nor JSON access.
+    //     Dropping it would widen the result set, so it is a client error —
+    //     unless its condition is empty, a no-op anyway.
+    //   - one whose first segment matches a known relation is a broken chain
+    //     with an empty condition (`handleRelation` throws for any other), a
+    //     no-op.
+    // Any other single-dot path is left alone — it may be a legitimate
+    // qualified ref like `alias.column` added by addToQuery null-protect on a
+    // prior hop.
     if (queryKey.includes('.')) {
-      if (isLegacyScope) return undefined
-
       const parts = queryKey.split('.')
-      if (parts.length > 2) return undefined
+      if (parts.length > 2) {
+        if (this.isEmptyConditionObject(queryProperty)) return undefined
+
+        throw new BadRequest(
+          `Invalid query: '${queryKey}' does not resolve to a column or relation of '${scope?.alias ?? this.ctx.tableName}'`,
+          { [queryKey]: queryProperty },
+        )
+      }
 
       const relations = scope ? scope.relations : this.ctx.relations
       if (relations?.[parts[0]]) return undefined

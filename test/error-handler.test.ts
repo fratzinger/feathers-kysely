@@ -15,6 +15,29 @@ describe('Kysely Error handler', () => {
     )
   })
 
+  it.each([
+    ['02000', 'NotFound'],
+    ['28000', 'Forbidden'],
+    ['08001', 'Unavailable'],
+    ['0A000', 'Unavailable'],
+    ['0K000', 'Unavailable'],
+    ['20000', 'BadRequest'],
+    ['21000', 'BadRequest'],
+    ['22001', 'BadRequest'],
+    ['23000', 'BadRequest'],
+    ['24000', 'BadRequest'],
+    ['25000', 'BadRequest'],
+    ['40001', 'BadRequest'],
+    ['42000', 'BadRequest'],
+    ['70100', 'BadRequest'],
+    ['HY000', 'GeneralError'],
+  ])('maps SQLSTATE %s to %s', (sqlState, name) => {
+    assert.throws(() => errorHandler({ sqlState, message: 'Something' }), {
+      name,
+      message: 'Something',
+    })
+  })
+
   it('sqliteError', () => {
     assert.throws(
       () =>

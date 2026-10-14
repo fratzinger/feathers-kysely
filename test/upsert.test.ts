@@ -771,6 +771,19 @@ describe('upsert', () => {
       expect(result.sku).toBe('NO-CONFLICT-FIELD')
     })
 
+    it('rejects upserting multiple records without multi', async () => {
+      const single = new KyselyService<Product>({ Model: db, name: 'products' })
+
+      await expect(
+        single.upsert([{ sku: 'MULTI-1', name: 'Test', price: 10 }], {
+          onConflictFields: ['sku'],
+        } as any),
+      ).rejects.toMatchObject({ name: 'MethodNotAllowed' })
+      expect(await app.service('products').find({ paginate: false })).toEqual(
+        [],
+      )
+    })
+
     it('should throw error on duplicate without conflict handling', async () => {
       await app.service('products').create({
         sku: 'DUP-ERROR',

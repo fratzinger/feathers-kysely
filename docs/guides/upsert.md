@@ -34,13 +34,13 @@ that returns nothing emits `created` with `undefined` as payload.
 
 All options live under `params.kysely`:
 
-| Option                    | Type       | Default    | Description                                  |
-| ------------------------- | ---------- | ---------- | -------------------------------------------- |
-| `onConflictFields`        | `string[]` | _required_ | Fields to use in the `ON CONFLICT` clause    |
-| `onConflictAction`        | `string`   | `'ignore'` | `'merge'` or `'ignore'`                       |
-| `onConflictMergeFields`   | `string[]` | —          | Specific fields to update on conflict        |
-| `onConflictExcludeFields` | `string[]` | —          | Fields to exclude from update                |
-| `onConflictReturning`     | `string`   | `'all'`    | `'all'`, `'written'`, `'changed'` or `'none'` |
+| Option                    | Type       | Default    | Description                                                                                                                |
+| ------------------------- | ---------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `onConflictFields`        | `string[]` | _required_ | Fields to use in the `ON CONFLICT` clause                                                                                  |
+| `onConflictAction`        | `string`   | `'ignore'` | `'merge'` or `'ignore'`                                                                                                    |
+| `onConflictMergeFields`   | `string[]` | —          | Specific fields to update on conflict                                                                                      |
+| `onConflictExcludeFields` | `string[]` | —          | Fields to exclude from update                                                                                              |
+| `onConflictReturning`     | `string`   | `'all'`    | `'all'`, `'written'`, `'changed'` or `'none'`                                                                              |
 | `returning`               | `boolean`  | `true`     | `false` skips `RETURNING` and every post-fetch — see [Skipping the return value](../api/service#skipping-the-return-value) |
 
 Conflict handling only kicks in when `onConflictFields` is set. Without it,
@@ -52,6 +52,15 @@ applies either way, and takes precedence over `onConflictReturning`.
 
 - **`merge`** — updates the existing row with the new values (`ON CONFLICT DO UPDATE`)
 - **`ignore`** — keeps the existing row unchanged (`ON CONFLICT DO NOTHING`), returns the existing row
+
+### One item per conflict key
+
+A batch holds each conflict key once. Two items with the same values in
+`onConflictFields` are rejected with a `BadRequest` before anything is written,
+on every dialect: one statement can't write a row twice — PostgreSQL refuses a
+`merge` outright. Merge or drop such items before the call. Items with `null` or
+no value in a conflict field don't count, as `NULL` never conflicts in a unique
+index.
 
 ### Controlling Merged Fields
 
@@ -88,12 +97,12 @@ get-or-create: every input row comes back, including rows whose conflict was
 ignored — those are fetched with an extra `SELECT` after the insert.
 `onConflictReturning` changes that:
 
-| Mode        | `ignore` (or merge with zero fields to update)                  | `merge`                                            |
-| ----------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| `'all'`     | every input row (ignored conflicts are post-fetched)             | every input row                                    |
-| `'written'` | only inserted rows; single create resolves to `undefined`        | every row is written, so this equals `'all'`       |
-| `'changed'` | like `'written'`                                                 | only inserted rows + rows whose merge fields differ |
-| `'none'`    | nothing: `undefined` for single, `[]` for multi                  | same                                               |
+| Mode        | `ignore` (or merge with zero fields to update)            | `merge`                                             |
+| ----------- | --------------------------------------------------------- | --------------------------------------------------- |
+| `'all'`     | every input row (ignored conflicts are post-fetched)      | every input row                                     |
+| `'written'` | only inserted rows; single create resolves to `undefined` | every row is written, so this equals `'all'`        |
+| `'changed'` | like `'written'`                                          | only inserted rows + rows whose merge fields differ |
+| `'none'`    | nothing: `undefined` for single, `[]` for multi           | same                                                |
 
 ```ts
 // Bulk import: insert what's new, skip duplicates, return only the new rows
@@ -133,6 +142,7 @@ bump, no dead tuples. MySQL natively skips identical writes with
 :::
 
 ::: warning Caveats
+
 - **TypeScript**: the service types still declare `Promise<Result>`. With
   `'written'`, `'changed'` or `'none'`, a single create may resolve to
   `undefined` at runtime.
@@ -143,7 +153,7 @@ bump, no dead tuples. MySQL natively skips identical writes with
   under concurrent writers. For a multi-row `merge` with `'changed'`, the
   returned rows behave like `'all'` (there is no way to tell changed rows
   apart).
-:::
+  :::
 
 ## Deprecated: `upsert` method
 
@@ -153,8 +163,10 @@ it does **not** emit events or run through the standard pipeline.
 
 ```ts
 // Deprecated — prefer create(data, { kysely: { ... } })
-await app.service("users").upsert(
-  { name: "Alice", age: 31 },
-  { onConflictFields: ["name"], onConflictAction: "merge" },
-);
+await app
+  .service("users")
+  .upsert(
+    { name: "Alice", age: 31 },
+    { onConflictFields: ["name"], onConflictAction: "merge" },
+  );
 ```
