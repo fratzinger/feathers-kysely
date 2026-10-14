@@ -38,7 +38,7 @@ in-memory SQLite), is a transparent passthrough — so app-level registration is
 safe across a mixed app.
 
 Root vs. nested is detected automatically: if `params.transaction` is already
-set, a savepoint is opened instead of a new root transaction. Forward
+set, the call joins that transaction instead of starting a new one. Forward
 `context.params.transaction` into nested service calls to include them:
 
 ```ts
@@ -65,9 +65,9 @@ app.service("users").hooks({
   (`created`/`updated`/`patched`/`removed`), including those of nested
   cross-service calls, are emitted in call order.
 - On rollback, no events are emitted at all.
-- Only the root transaction flushes; nested savepoints just queue onto it. A
-  savepoint rolled back drops the events queued within it, even when the root
-  commits after all.
+- Only the root transaction flushes; nested calls just queue onto it. A
+  savepoint (`nested: 'savepoint'`) rolled back drops the events queued within
+  it, even when the root commits after all.
 - Every event carries what it would without a transaction: the call's result
   and `dispatch` once all its hooks are done — resolvers such as
   `resolveResult` / `resolveExternal` included, wherever they sit around
@@ -85,22 +85,29 @@ For a nested service's event to be deferred it must also run through
 
 Two decisions are independent of each other:
 
-| Option   | Default       |                                                                      |
-| -------- | ------------- | -------------------------------------------------------------------- |
-| `start`  | `true`        | Without a transaction: start one, or (`false`) run without one.      |
-| `nested` | `'savepoint'` | Within a transaction: a savepoint of its own, or (`'join'`) join it. |
+| Option   | Default  |                                                                                |
+| -------- | -------- | ------------------------------------------------------------------------------ |
+| `start`  | `true`   | Without a transaction: start one, or (`false`) run without one.                |
+| `nested` | `'join'` | Within a transaction: join it, or (`'savepoint'`) open a savepoint of its own. |
 
-A savepoint lets a nested call fail on its own — the caller can catch the error
-and go on. But savepoints of one transaction form a stack, so nested calls with
-savepoints can't run in parallel. Joining needs no savepoint, so nested calls
-can run in parallel; a failure in one aborts the whole transaction. Either way
+Joining needs no savepoint, so nested calls can run in parallel and cost no
+extra round trips. A joined call that fails leaves the transaction
+**rollback-only**: even when the caller catches the error and goes on, the root
+rolls back rather than commit what the failed call wrote, and rejects ("rolls
+back rather than commit"). That covers a database error, too — on PostgreSQL it
+aborts the transaction, and a plain COMMIT would roll it back without a word.
+
+A savepoint lets a nested call fail on its own: it rolls back to its savepoint,
+and the caller can catch the error and go on. But savepoints of one transaction
+form a stack, so nested calls with savepoints can't run in parallel. Either way
 the call's event waits for the root's commit.
 
-- `withTransaction({ nested: 'join' })` app-wide makes every mutating call
-  transactional, and nested calls join the caller's transaction.
-- `withTransaction({ start: false, nested: 'join' })` suits a service only ever
-  called within another call's transaction: it joins that one and starts none
-  of its own.
+- `withTransaction()` app-wide makes every mutating call transactional, and
+  nested calls join the caller's transaction.
+- `withTransaction({ start: false })` suits a service only ever called within
+  another call's transaction: it joins that one and starts none of its own.
+- `withTransaction({ nested: 'savepoint' })` suits a nested call the caller
+  wants to recover from. Call those one after another.
 
 ```ts
 import { withTransaction } from "@fratzinger/feathers-kysely";
@@ -121,24 +128,24 @@ app.service("orders").hooks({
   },
 });
 
-const joining = withTransaction({ start: false, nested: "join" });
+const joining = withTransaction({ start: false });
 app.service("order-items").hooks({ around: { all: [joining] } });
 app.service("audit").hooks({ around: { all: [joining] } });
 ```
 
-A joined call has no savepoint to roll back to: if the caller catches its error
-and goes on, what it wrote before failing commits with the root — and after a
-database error, the transaction is aborted altogether. Let the error roll back
-the root. To recover from a nested failure, use savepoints and call one after
-another.
+Nested calls join by default, as in Spring's and Rails' transactions. The
+transaction hooks of `@feathersjs/knex` always open a savepoint instead —
+`nested: 'savepoint'` behaves like them.
 
 A nested call must not outlive the transaction it runs in. When one fails in
 `Promise.all`, the root rolls back right away, while the others may still be
 running. Those are refused from then on — they reject with "outlived its
 transaction" instead of writing outside of it. And a nested call still in its
 savepoint when the root is about to commit — one nobody awaited — rolls the root
-back ("still running") rather than commit half its work. Await every nested call
-before the call that started the transaction returns.
+back ("still running") rather than commit half its work. A joined call nobody
+awaited can't be told apart from the root's own work: it is refused only once
+the transaction ended. Await every nested call before the call that started the
+transaction returns.
 
 ## After the commit: `afterCommit()`
 
@@ -237,19 +244,22 @@ try {
 }
 ```
 
-## Nested Transactions (Savepoints)
+A transaction passed in by hand is yours to commit: a call that joined it and
+failed can't hold back your `commit()`. Roll back when a call failed, even one
+whose error you caught.
 
-Nested transactions are backed by savepoints. When a `params.transaction` is
-already present, `withTransaction()` (and the legacy `trxStart()`) opens a
-savepoint via `trx.savepoint()` instead of a new root transaction, releasing it
-on success and rolling back to it on error. This happens automatically — just
-forward `context.params.transaction` into the nested service call.
+## Savepoints: `nested: 'savepoint'`
+
+With `nested: 'savepoint'`, `withTransaction()` — like the legacy `trxStart()`,
+always — opens a savepoint via `trx.savepoint()` when a `params.transaction` is
+already present, instead of joining it. It releases the savepoint on success and
+rolls back to it on error, so the caller can catch the error and go on.
 
 ::: warning Not in parallel
 Savepoints of one transaction form a stack: releasing one releases every
 savepoint opened after it. So a nested call opens its savepoint only on top of
-its caller's: of nested `withTransaction()` calls in parallel (`Promise.all`),
-every one but the first rejects with "nested calls ran in parallel" before it
-runs, rather than let the database fail. Run them one after another, or let the
-nested services join: `withTransaction({ nested: 'join' })`.
+its caller's: of nested calls with savepoints in parallel (`Promise.all`), every
+one but the first rejects with "nested calls ran in parallel" before it runs,
+rather than let the database fail. Run them one after another, or let them join,
+the default.
 :::

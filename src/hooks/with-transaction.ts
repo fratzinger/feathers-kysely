@@ -26,8 +26,17 @@ const queuedBefore = new WeakMap<KyselyAdapterTransaction, number>()
 /** Roots whose COMMIT or ROLLBACK went out. */
 const ended = new WeakSet<KyselyAdapterTransaction>()
 
+/** Transactions a joined call failed in: they may only roll back. */
+const rollbackOnly = new WeakSet<KyselyAdapterTransaction>()
+
+/** Transactions rolled back already. */
+const rolledBack = new WeakSet<KyselyAdapterTransaction>()
+
 const PARALLEL_MESSAGE =
-  "withTransaction(): nested calls ran in parallel. Savepoints of one transaction form a stack, so nested calls with savepoints of their own must run one after another — or let the nested services join the transaction: withTransaction({ nested: 'join' })."
+  "withTransaction(): nested calls ran in parallel. Savepoints of one transaction form a stack, so nested calls with savepoints of their own must run one after another — or let them join the transaction, the default without { nested: 'savepoint' }."
+
+const ROLLBACK_ONLY_MESSAGE =
+  "withTransaction(): a call that joined this transaction failed, so it rolls back rather than commit what that call wrote. Let the error roll back the transaction, or give the nested call a savepoint of its own to recover from: withTransaction({ nested: 'savepoint' })."
 
 const OUTLIVED_MESSAGE =
   'withTransaction(): a nested call outlived its transaction, which already committed or rolled back. Await every nested call before the call that started the transaction returns.'
@@ -156,6 +165,11 @@ const commitTransaction = async (
 ): Promise<void> => {
   const { trx, id, savepoint, savepoints, parent, resolve } = transaction
 
+  if (rollbackOnly.has(transaction)) {
+    await rollbackTransaction(transaction)
+    throw new GeneralError(ROLLBACK_ONLY_MESSAGE)
+  }
+
   try {
     if (savepoint) {
       // releasing an outer savepoint would release an inner one along with it
@@ -199,6 +213,11 @@ const rollbackTransaction = async (
   transaction: KyselyAdapterTransaction,
 ): Promise<void> => {
   const { trx, id, savepoint, savepoints } = transaction
+
+  if (rolledBack.has(transaction)) {
+    return
+  }
+  rolledBack.add(transaction)
 
   try {
     if (savepoint) {
@@ -326,13 +345,13 @@ export type WithTransactionOptions = {
    */
   start?: boolean
   /**
-   * Within a transaction (a call forwarding `params.transaction`): a savepoint
-   * of its own (default) — a failure rolls back only this call, but nested calls
-   * can't run in parallel — or `join` it: parallel-safe, and a failure aborts
-   * the whole transaction. Either way the call's event waits for the root's
-   * commit.
+   * Within a transaction (a call forwarding `params.transaction`): `join` it
+   * (default) — parallel-safe; a failure leaves the transaction rollback-only,
+   * even when the caller catches it — or a `savepoint` of its own: a failure
+   * rolls back only this call and the caller may go on, but nested calls can't
+   * run in parallel. Either way the call's event waits for the root's commit.
    *
-   * @default 'savepoint'
+   * @default 'join'
    */
   nested?: 'savepoint' | 'join'
 }
@@ -340,7 +359,7 @@ export type WithTransactionOptions = {
 /**
  * Around hook that wraps a service method in a Kysely `ControlledTransaction`:
  * start → commit on success → rollback on error. Nested calls that forward
- * `params.transaction` use savepoints, or join it (`nested: 'join'`). Feathers
+ * `params.transaction` join it, or open a savepoint (`nested: 'savepoint'`). Feathers
  * service events (`created`/`updated`/`patched`/`removed`) are deferred and only
  * emitted once the root transaction commits — and discarded on rollback —
  * including events from nested cross-service calls.
@@ -360,8 +379,17 @@ export const withTransaction =
 
     const parent = (context.params as KyselyAdapterParams).transaction
 
-    if (parent && options?.nested === 'join') {
-      await next()
+    if (parent && options?.nested !== 'savepoint') {
+      try {
+        await next()
+      } catch (error) {
+        // There is no savepoint to roll back to. Whether the caller catches
+        // the error or not, the transaction must not commit what this call
+        // wrote — nor, on PostgreSQL, end in a COMMIT that silently rolls back
+        // a transaction aborted by a failed statement.
+        rollbackOnly.add(parent)
+        throw error
+      }
       deferEvent(context, parent)
       return
     }
