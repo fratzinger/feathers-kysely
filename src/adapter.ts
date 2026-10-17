@@ -294,14 +294,18 @@ export class KyselyAdapter<
     if (options?.order) {
       q = relations.applyOrder(q, filters.$sort)
 
-      // When a result window (LIMIT/OFFSET) is in effect but the caller gave no
-      // $sort, append the primary key as a deterministic tiebreaker. Without it,
-      // OFFSET pagination can return overlapping or missing rows across pages.
-      const hasSort = !!filters.$sort && Object.keys(filters.$sort).length > 0
+      // When a result window (LIMIT/OFFSET) is in effect, append the primary key
+      // as the last sort key, so ties on a non-unique $sort (or no $sort at all)
+      // break deterministically. Without it, OFFSET pagination can return
+      // overlapping or missing rows across pages.
+      const { id, name } = this.options
+      const sortsById =
+        !!filters.$sort &&
+        (id in filters.$sort || `${name}.${id}` in filters.$sort)
       const windowed =
         (typeof filters.$limit === 'number' && filters.$limit > 0) ||
         (typeof filters.$skip === 'number' && filters.$skip > 0)
-      if (!hasSort && windowed) {
+      if (!sortsById && windowed) {
         q = (q as any).orderBy(this.col(this.options.id), 'asc')
       }
     }

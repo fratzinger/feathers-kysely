@@ -26,7 +26,7 @@ exports[`sql shape > $sort by belongsTo column 1`] = `
   "parameters": [
     25,
   ],
-  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" order by "assignment"."title" asc limit ?",
+  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" order by "assignment"."title" asc, "events"."id" asc limit ?",
 }
 `;
 
@@ -35,7 +35,7 @@ exports[`sql shape > $sort by hasMany column 1`] = `
   "parameters": [
     25,
   ],
-  "sql": "select "assignments".* from "assignments" left join (select "categories"."assignmentId" as "__fk_sort_key", min("categories"."typeId") as "__fk_sort_value" from "categories" as "categories" group by "categories"."assignmentId") as "__fk_sort_0__categories" on "__fk_sort_0__categories"."__fk_sort_key" = "assignments"."id" order by "__fk_sort_0__categories"."__fk_sort_value" asc limit ?",
+  "sql": "select "assignments".* from "assignments" left join (select "categories"."assignmentId" as "__fk_sort_key", min("categories"."typeId") as "__fk_sort_value" from "categories" as "categories" group by "categories"."assignmentId") as "__fk_sort_0__categories" on "__fk_sort_0__categories"."__fk_sort_key" = "assignments"."id" order by "__fk_sort_0__categories"."__fk_sort_value" asc, "assignments"."id" asc limit ?",
 }
 `;
 
@@ -118,7 +118,7 @@ exports[`sql shape > filter and sort on the same relation 1`] = `
     "a-1",
     25,
   ],
-  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) order by "assignment"."number" desc limit ?",
+  "sql": "select "events".* from "events" left join "assignments" as "assignment" on "assignment"."id" = "events"."assignmentId" where exists (select 1 from "assignments" as "assignment" where ("assignment"."id" = "events"."assignmentId" and "assignment"."title" = ?)) order by "assignment"."number" desc, "events"."id" asc limit ?",
 }
 `;
 

@@ -43,6 +43,13 @@ class MyService extends KyselyAdapter {
 | `properties` | `object`             | —          | Map of column name → JSON schema property object (typically your service's schema `properties`). Used as the set of known columns and as a declarative source for a column's database type via an [`x-db-type`](#declaring-column-types) annotation |
 | `getPropertyType` | `function`       | —          | Resolve a column's type. Returns `'json'`/`'jsonb'` for JSON columns, or a temporal type (`'date'`, `'timestamp'`, `'timestamptz'`, `'datetime'`) to enable [date coercion](./operators#querying-dates-timestamps). Takes precedence over `x-db-type` |
 
+## Stable pagination
+
+With `$limit` or `$skip` the adapter appends the primary key as the last sort
+key, unless `$sort` already contains it. Rows that tie on a non-unique `$sort`
+(say `{ createdAt: -1 }`) then come back in the same order on every page, so
+`$skip` neither repeats nor skips them.
+
 ## Declaring column types
 
 Two features need to know a column's underlying database type:
