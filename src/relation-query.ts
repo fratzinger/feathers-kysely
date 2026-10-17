@@ -697,7 +697,7 @@ export class RelationQuery {
           (operator === '$in' || operator === '$nin') &&
           Array.isArray(value)
         ) {
-          qs.push(buildIn(eb, column, operator, value))
+          qs.push(buildIn(eb, column, operator, value, this.ctx.dialectType))
           continue
         }
 

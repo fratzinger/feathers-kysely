@@ -5,7 +5,13 @@
   "homepage": "https://github.com/fratzinger/feathers-kysely",
   "keywords": [
     "feathers",
-    "feathers-plugin"
+    "feathers-plugin",
+    "kysely",
+    "database",
+    "sql",
+    "postgres",
+    "mysql",
+    "sqlite"
   ],
   "license": "MIT",
   "repository": {

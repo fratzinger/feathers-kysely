@@ -43,6 +43,13 @@ them. Add the `null` explicitly (`$nin: [null, 1]`) to include them.
 An empty array keeps its boolean identity: `$in: []` matches nothing, `$nin: []`
 matches everything.
 
+### Long lists
+
+On PostgreSQL a list of scalars binds as a single array parameter —
+`age = any($1)` / `age <> all($1)` — so `$in` takes lists longer than the 65535
+parameters a statement can bind. MySQL and SQLite bind one parameter per
+element and are limited to 65535 / 32766 elements.
+
 ## Pattern Matching
 
 | Operator     | SQL                    | Description                                    |
