@@ -57,6 +57,15 @@ import { addToQuery } from 'feathers-utils'
 // from every row before the result is returned.
 const PAGINATION_TOTAL_KEY = '__fk_total'
 
+// Most parameters one statement may bind, per dialect: Postgres' wire protocol
+// counts them in 16 bits, as does MySQL's for prepared statements; SQLite's
+// SQLITE_MAX_VARIABLE_NUMBER defaults to 32766 since 3.32.
+const MAX_PARAMETERS: Record<DialectType, number> = {
+  postgres: 65535,
+  mysql: 65535,
+  sqlite: 32766,
+}
+
 type KyselyAdapterOptionsDefined = KyselyAdapterOptions & {
   id: string
   dialectType: DialectType
@@ -414,6 +423,61 @@ export class KyselyAdapter<
       result.numAffectedRows ??
       result.numInsertedOrUpdatedRows
     return count != null && Number(count) > 0
+  }
+
+  /**
+   * Split the rows of a multi create into chunks whose INSERT stays under the
+   * dialect's parameter limit. A row binds one parameter per column of the
+   * statement — the columns of all rows, a missing value is `DEFAULT` — so a
+   * value that is an expression binding parameters of its own is not counted.
+   */
+  private chunkByParameterLimit(rows: Data[]): Data[][] {
+    const { maxParameters, dialectType } = this.options
+    const limit = maxParameters ?? MAX_PARAMETERS[dialectType] ?? 999
+
+    const columns = new Set<string>()
+    for (const row of rows) {
+      for (const key in row) columns.add(key)
+    }
+
+    const size = Math.max(1, Math.floor(limit / Math.max(1, columns.size)))
+    if (rows.length <= size) return [rows]
+
+    const chunks: Data[][] = []
+    for (let i = 0; i < rows.length; i += size) {
+      chunks.push(rows.slice(i, i + size))
+    }
+    return chunks
+  }
+
+  /**
+   * Run `fn` in a transaction: the caller's, or one of its own that commits
+   * once `fn` resolves and rolls back when it rejects.
+   */
+  private async inTransaction<T>(
+    params: ServiceParams,
+    fn: (params: ServiceParams) => Promise<T>,
+  ): Promise<T> {
+    const db = this.db(params)
+    if (db.isTransaction) {
+      return fn(params)
+    }
+
+    const trx = await db.startTransaction().execute().catch(this.handleError)
+    try {
+      const result = await fn({
+        ...params,
+        transaction: { trx, starting: false },
+      })
+      await trx.commit().execute().catch(this.handleError)
+      return result
+    } catch (error) {
+      await trx
+        .rollback()
+        .execute()
+        .catch(() => {})
+      throw error
+    }
   }
 
   private convertValues<T>(data: T): T {
@@ -922,6 +986,21 @@ export class KyselyAdapter<
         )
       }
     }
+
+    // More rows than one statement can bind: one INSERT per chunk, all or none.
+    if (isArray) {
+      const chunks = this.chunkByParameterLimit(_data as Data[])
+      if (chunks.length > 1) {
+        return this.inTransaction(params, async (trxParams) => {
+          const results: Result[] = []
+          for (const chunk of chunks) {
+            results.push(...(await this._create(chunk, trxParams)))
+          }
+          return results
+        })
+      }
+    }
+
     // `returning: false` forces the no-return path, overriding onConflictReturning.
     const returningMode = !wantReturn
       ? 'none'

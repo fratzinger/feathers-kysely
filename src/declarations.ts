@@ -38,6 +38,14 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
    * the annotation (or to no special handling).
    */
   getPropertyType?: (property: string) => DbPropertyType | undefined
+  /**
+   * Most parameters one statement may bind. A multi `create` binding more (one
+   * per row and column) is split into several INSERTs within one transaction.
+   * Defaults to the dialect's limit: 65535 for Postgres and MySQL, 32766 for
+   * SQLite. Lower it for a driver with a smaller one, e.g. 100 for Cloudflare
+   * D1 or 999 for SQLite before 3.32.
+   */
+  maxParameters?: number
 }
 
 /**
