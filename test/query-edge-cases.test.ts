@@ -369,6 +369,35 @@ describe('query edge cases', () => {
       assert.ok(!ids1.some((id) => ids2.includes(id)))
       assert.ok(Math.max(...ids1) < Math.min(...ids2))
     })
+
+    // Ties on a non-unique sort column only *may* come back in a different
+    // order per page, so a data-driven test could pass by luck. Assert the SQL.
+    const orderBy = (query: Record<string, any>) =>
+      app
+        .service('users')
+        .composeQuery(
+          { query },
+          { select: true, limit: true, offset: true, order: true },
+        )
+        .compile()
+        .sql.split(/order by/i)[1]
+        ?.replace(/\s+limit[\s\S]*$/i, '')
+        .trim()
+
+    it('paginated find with a non-unique $sort appends the id tiebreaker', () => {
+      const result = orderBy({ $sort: { age: -1 }, $limit: 2 })
+      assert.match(result!, /age.* desc, .*id.* asc$/)
+    })
+
+    it('paginated find sorted by id adds no second id', () => {
+      const result = orderBy({ $sort: { id: -1 }, $limit: 2 })
+      assert.match(result!, /^\S*id\S* desc$/)
+    })
+
+    it('unwindowed find keeps the $sort as given', () => {
+      const result = orderBy({ $sort: { age: 1 } })
+      assert.match(result!, /^\S*age\S* asc$/)
+    })
   })
 
   // MARK: Dialect operator handling

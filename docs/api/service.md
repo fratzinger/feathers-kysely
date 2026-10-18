@@ -42,6 +42,25 @@ class MyService extends KyselyAdapter {
 | `relations` | `object`              | —          | Relation definitions (see [Relations](../relations/setup)) |
 | `properties` | `object`             | —          | Map of column name → JSON schema property object (typically your service's schema `properties`). Used as the set of known columns and as a declarative source for a column's database type via an [`x-db-type`](#declaring-column-types) annotation |
 | `getPropertyType` | `function`       | —          | Resolve a column's type. Returns `'json'`/`'jsonb'` for JSON columns, or a temporal type (`'date'`, `'timestamp'`, `'timestamptz'`, `'datetime'`) to enable [date coercion](./operators#querying-dates-timestamps). Takes precedence over `x-db-type` |
+| `maxParameters` | `number`         | dialect limit | Most parameters one statement may bind. See [Large multi creates](#large-multi-creates) |
+
+## Large multi creates
+
+A statement binds at most a dialect-specific number of parameters: 65535 on
+PostgreSQL and MySQL, 32766 on SQLite. A multi `create` binds one per row and
+column, so 10 000 rows of 7 columns would not fit into one `INSERT`. The adapter
+splits such a call into several `INSERT`s and runs them in one transaction — the
+caller's, or one of its own — so the call still writes all rows or none.
+
+Set `maxParameters` for a driver with a lower limit, e.g. `100` for Cloudflare
+D1 or `999` for SQLite before 3.32.
+
+## Stable pagination
+
+With `$limit` or `$skip` the adapter appends the primary key as the last sort
+key, unless `$sort` already contains it. Rows that tie on a non-unique `$sort`
+(say `{ createdAt: -1 }`) then come back in the same order on every page, so
+`$skip` neither repeats nor skips them.
 
 ## Declaring column types
 
