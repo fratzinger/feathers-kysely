@@ -62,7 +62,7 @@
     "@feathersjs/commons": "^5.0.50",
     "@feathersjs/errors": "^5.0.50",
     "@feathersjs/feathers": "^5.0.50",
-    "feathers-utils": "^10.9.2"
+    "feathers-utils": "^10.9.3"
   },
   "devDependencies": {
     "@feathers-community/eslint-config": "^0.3.0",
@@ -71,11 +71,11 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "^5.0.4",
+    "@vitest/coverage-v8": "^5.0.5",
     "better-sqlite3": "^13.0.3",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "feathers-adapter-vitest": "^0.3.0",
-    "kysely": "^0.29.6",
+    "kysely": "^0.29.7",
     "mysql2": "^3.24.6",
     "pg": "^8.23.1",
     "shx": "^0.4.0",
@@ -84,11 +84,11 @@
     "unrun": "^0.3.1",
     "vite": "^8.3.4",
     "vitepress": "^1.6.4",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   },
   "peerDependencies": {
     "@feathersjs/feathers": "^5.0.0",
     "kysely": ">=0.28.0 <0.30.0"
   },
-  "packageManager": "pnpm@12.11.2"
+  "packageManager": "pnpm@12.14.0"
 }
