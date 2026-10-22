@@ -2024,4 +2024,68 @@ describe('relations', () => {
       ['Alice'],
     )
   })
+
+  // MARK: NULL children under $ne / $nin / $every
+
+  it('a NULL child matches $ne / $nin inside $some and $none', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      // Alice's only todo has no assignee: a NULL is not Bob
+      { text: 'Alice todo', userId: users[0].id, assigneeId: null },
+      { text: 'Bob todo', userId: users[1].id, assigneeId: users[1].id },
+    ])
+
+    for (const assigneeId of [{ $ne: users[1].id }, { $nin: [users[1].id] }]) {
+      const some = await app.service('users').find({
+        query: { todos: { $some: { assigneeId } }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      assert.deepStrictEqual(
+        some.map((u) => u.name),
+        ['Alice'],
+      )
+
+      const none = await app.service('users').find({
+        query: { todos: { $none: { assigneeId } }, $sort: { name: 1 } },
+        paginate: false,
+      })
+      assert.deepStrictEqual(
+        none.map((u) => u.name),
+        ['Bob'],
+      )
+    }
+  })
+
+  it('$every rejects a NULL child that $some rejects too', async () => {
+    const users = await app
+      .service('users')
+      .create([{ name: 'Alice' }, { name: 'Bob' }])
+
+    await app.service('todos').create([
+      // Alice's only todo has no assignee: a NULL is not > 0
+      { text: 'Alice todo', userId: users[0].id, assigneeId: null },
+      { text: 'Bob todo', userId: users[1].id, assigneeId: users[1].id },
+    ])
+
+    // A bare NOT (assigneeId > 0) is UNKNOWN for Alice's todo, so it would
+    // not count as a violation and Alice would pass $every — while failing
+    // $some with the same single todo.
+    for (const operator of ['$some', '$every'] as const) {
+      const result = await app.service('users').find({
+        query: {
+          todos: { [operator]: { assigneeId: { $gt: 0 } } },
+          $sort: { name: 1 },
+        },
+        paginate: false,
+      })
+      assert.deepStrictEqual(
+        result.map((u) => u.name),
+        ['Bob'],
+        operator,
+      )
+    }
+  })
 })

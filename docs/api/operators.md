@@ -11,9 +11,30 @@ All standard [Feathers query operators](https://feathersjs.com/api/databases/que
 | `$gt`        | `>`             | Greater than                                   |
 | `$gte`       | `>=`            | Greater than or equal                          |
 | `$in`        | `IN`            | In a list of values (handles `null`)           |
-| `$nin`       | `NOT IN`        | Not in a list of values (handles `null`)       |
+| `$nin`       | `NOT IN`        | Not in a list of values (matches `null` rows)  |
 | `$eq`        | `=` / `IS`      | Equal (handles `null`)                         |
-| `$ne`        | `!=` / `IS NOT` | Not equal (handles `null`)                     |
+| `$ne`        | `!=` / `IS NOT` | Not equal (matches `null` rows)                |
+
+### `null` and negated operators
+
+A NULL row is not 25, so `$ne: 25` and `$nin: [25]` match it, as they do in
+MongoDB. Plain SQL would drop it — `age != 25` is UNKNOWN for a NULL — so an
+explicit `IS NULL` is ORed in:
+
+```ts
+// age != 25 OR age IS NULL
+await app.service("users").find({ query: { age: { $ne: 25 } } });
+
+// age NOT IN (25) OR age IS NULL
+await app.service("users").find({ query: { age: { $nin: [25] } } });
+```
+
+The same holds for every negated operator — `$notLike`, `$notILike`,
+`$notBetween` and `$notRegex` — so each one is the exact complement of its
+positive twin: every row matches either `$like: "a%"` or `$notLike: "a%"`.
+
+To exclude the NULL rows as well, add `null` to the list: `$nin: [null, 25]`
+(see below), or combine with `$ne: null`.
 
 ### `null` inside `$in` / `$nin`
 
@@ -35,10 +56,6 @@ await app.service("users").find({ query: { age: { $nin: [null, 2] } } });
 Without that lifting a plain `age IN (null, 1)` would silently skip every NULL
 row, and `age NOT IN (null, 2)` would be UNKNOWN for *every* row and match
 nothing at all.
-
-An array **without** a `null` compiles to an untouched `IN` / `NOT IN`, so NULL
-rows stay excluded from `{ age: { $nin: [1] } }` — `age <> 1` is unknown for
-them. Add the `null` explicitly (`$nin: [null, 1]`) to include them.
 
 An empty array keeps its boolean identity: `$in: []` matches nothing, `$nin: []`
 matches everything.
@@ -179,14 +196,15 @@ await app.service("users").find({
 ### `$not`
 
 `$not` negates an entire condition object at the database level — it compiles to
-`NOT (...)` around whatever the inner query produces. It is **operator-agnostic**:
-the inner condition can use any operator, nested `$and` / `$or`, or multiple keys.
+`(...) IS NOT TRUE` around whatever the inner query produces. It is
+**operator-agnostic**: the inner condition can use any operator, nested
+`$and` / `$or`, or multiple keys.
 
 ```ts
-// NOT (age = 20)
+// (age = 20) IS NOT TRUE
 await app.service("users").find({ query: { $not: { age: 20 } } });
 
-// NOT (age > 15) — works with any operator, not just equality
+// (age > 15) IS NOT TRUE — works with any operator, not just equality
 await app.service("users").find({ query: { $not: { age: { $gt: 15 } } } });
 
 // De Morgan: NOT (age = 10 OR age = 20) === age != 10 AND age != 20
@@ -194,6 +212,11 @@ await app.service("users").find({
   query: { $not: { $or: [{ age: 10 }, { age: 20 }] } },
 });
 ```
+
+`$not` is the exact complement of its condition: every row matches one of the
+two. A bare SQL `NOT (age > 15)` would be UNKNOWN for a NULL age and drop that
+row from both; `IS NOT TRUE` keeps it, as a Mongo `$not` does. A relation path
+can never be UNKNOWN, so `$not` over one stays a plain `NOT EXISTS (...)`.
 
 Because the whole object is negated as a unit, a **multi-key** condition negates
 the conjunction — `$not: { age: 20, name: "b" }` is `NOT (age = 20 AND name = "b")`,

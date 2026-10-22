@@ -11,11 +11,13 @@ import {
   buildJsonbContainment,
   buildJsonbHasKey,
   buildLikePattern,
+  buildNot,
   buildRegexMatch,
   coerceTemporalQueryProperty,
   getOperator,
   getOrderByModifier,
   getSortDirection,
+  NEGATED_OPERATORS,
   qualifyColumn,
   temporalKind,
   transformOperatorValue,
@@ -484,7 +486,7 @@ export class RelationQuery {
       // "every child matches X" = "no child exists that does NOT match X"
       const filterConditions =
         operator === '$every' && conditions.length
-          ? [subEb.not(subEb.and(conditions))]
+          ? [buildNot(subEb.and(conditions))]
           : conditions
 
       return subEb.and([
@@ -689,6 +691,16 @@ export class RelationQuery {
       for (const operator in queryProperty) {
         const value = (queryProperty as Record<string, any>)[operator]
 
+        // `age != 25` is UNKNOWN for a NULL row, yet a NULL is not 25 — so a
+        // negated operator gets the NULL rows ORed back in (see
+        // `NEGATED_OPERATORS`). `$ne: null` stays a plain `IS NOT NULL`.
+        const push = (expression: any) =>
+          qs.push(
+            NEGATED_OPERATORS.includes(operator) && value !== null
+              ? eb.or([expression, eb(column, 'is', null)])
+              : expression,
+          )
+
         // `$in` / `$nin` need a null in the array turned into an explicit
         // `IS (NOT) NULL`, and an empty array turned into a boolean constant —
         // plain `IN (null, ...)` / `NOT IN (null, ...)` would silently miss
@@ -697,7 +709,7 @@ export class RelationQuery {
           (operator === '$in' || operator === '$nin') &&
           Array.isArray(value)
         ) {
-          qs.push(buildIn(eb, column, operator, value))
+          push(buildIn(eb, column, operator, value))
           continue
         }
 
@@ -711,26 +723,24 @@ export class RelationQuery {
             operator === '$contained' ||
             operator === '$overlap')
         ) {
-          qs.push(buildJsonbContainment(eb, column, operator, value))
+          push(buildJsonbContainment(eb, column, operator, value))
           continue
         }
 
         // Branch operators that can't be expressed as `eb(column, op, value)`:
         // range, prefix/suffix LIKE, regex, and jsonb key-existence.
         if (operator === '$between' || operator === '$notBetween') {
-          qs.push(buildBetween(column, operator, value))
+          push(buildBetween(column, operator, value))
           continue
         }
 
         if (operator === '$startsWith' || operator === '$endsWith') {
-          qs.push(buildLikePattern(column, operator, value))
+          push(buildLikePattern(column, operator, value))
           continue
         }
 
         if (operator === '$regex' || operator === '$notRegex') {
-          qs.push(
-            buildRegexMatch(column, operator, this.ctx.dialectType, value),
-          )
+          push(buildRegexMatch(column, operator, this.ctx.dialectType, value))
           continue
         }
 
@@ -739,14 +749,14 @@ export class RelationQuery {
           operator === '$hasKeyAny' ||
           operator === '$hasKeyAll'
         ) {
-          qs.push(buildJsonbHasKey(column, operator, value))
+          push(buildJsonbHasKey(column, operator, value))
           continue
         }
 
         const op = getOperator(operator, value, this.ctx.dialectType)
         if (!op) continue
 
-        qs.push(
+        push(
           eb(column, op, transformOperatorValue(operator, value, propertyType)),
         )
       }
@@ -805,10 +815,10 @@ export class RelationQuery {
     if (queryKey === '$not') {
       // Negate the whole condition object at the DB level: NOT (k1 AND k2 ...).
       // Operator-agnostic and correct for multi-key conditions, unlike a
-      // per-property inversion.
-      //
+      // per-property inversion. `buildNot` keeps the rows the condition is
+      // UNKNOWN for (a NULL age under `$gt`), which a bare NOT would drop.
       const result = this.handleQuery(eb, queryProperty, options)
-      return result?.length ? eb.not(eb.and(result)) : undefined
+      return result?.length ? buildNot(eb.and(result)) : undefined
     }
 
     // An explicit `tableName` wins (including `null`, meaning "already

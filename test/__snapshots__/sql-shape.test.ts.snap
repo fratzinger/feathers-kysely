@@ -128,7 +128,7 @@ exports[`sql shape > hasMany $every 1`] = `
     1,
     25,
   ],
-  "sql": "select "assignments".* from "assignments" where not exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and not "categories"."active" = ?)) order by "assignments"."id" asc limit ?",
+  "sql": "select "assignments".* from "assignments" where not exists (select 1 from "categories" as "categories" where ("categories"."assignmentId" = "assignments"."id" and ("categories"."active" = ?) is not true)) order by "assignments"."id" asc limit ?",
 }
 `;
 

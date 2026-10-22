@@ -2,24 +2,25 @@ import { sql } from 'kysely'
 import type { ExpressionBuilder } from 'kysely'
 
 /**
- * Build an `$in` / `$nin` expression from an array value, treating a `null`
- * element as a value you can actually match.
+ * Build an `$in` / `$nin` expression from an array value, treating `null` as a
+ * value like any other, as in a Mongo-shaped Feathers query.
  *
- * Plain SQL `IN` / `NOT IN` compare with `=` / `<>`, so a `null` in the list is
- * never equal to anything — `age IN (null, 1)` misses every NULL row, and
- * `age NOT IN (null, 2)` is UNKNOWN for *every* row and therefore matches
- * nothing at all. Feathers queries are Mongo-shaped, where `null` in `$in` is a
- * real candidate, so the null is pulled out of the list and turned into an
- * explicit `IS NULL` / `IS NOT NULL`:
+ * Plain SQL `IN` / `NOT IN` compare with `=` / `<>`, and any comparison with
+ * NULL is UNKNOWN: `age IN (null, 1)` misses every NULL row, `age NOT IN (2)`
+ * misses them too (a NULL is not 2, yet it is dropped), and
+ * `age NOT IN (null, 2)` is UNKNOWN for *every* row and matches nothing at all.
+ * So the null is pulled out of the list and turned into an explicit
+ * `IS NULL` / `IS NOT NULL`, and a `$nin` without one lets NULL rows through:
  *
  * - `$in: [null, 1]`  -> `(age in (1) or age is null)`
  * - `$in: [null]`     -> `age is null`
+ * - `$nin: [2]`       -> `(age not in (2) or age is null)`
  * - `$nin: [null, 2]` -> `(age not in (2) and age is not null)`
  * - `$nin: [null]`    -> `age is not null`
  *
  * Empty arrays keep their boolean identity: `$in: []` matches nothing (`1 = 0`),
- * `$nin: []` matches everything (`1 = 1`). An array without a `null` compiles to
- * an untouched `IN` / `NOT IN`.
+ * `$nin: []` matches everything (`1 = 1`). An `$in` without a `null` compiles
+ * to an untouched `IN`.
  *
  * `column` may be a plain column reference or an already-built expression (e.g.
  * a JSON-path accessor from `traverseJSON`). Standard SQL — all dialects.
@@ -42,7 +43,10 @@ export function buildIn(
   }
 
   if (!hasNull) {
-    return eb(column, isIn ? 'in' : 'not in', values)
+    // A NULL row is not in the list, so `$nin` matches it.
+    return isIn
+      ? eb(column, 'in', values)
+      : eb.or([eb(column, 'not in', values), eb(column, 'is', null)])
   }
 
   const nullCheck = eb(column, isIn ? 'is' : 'is not', null)
@@ -103,13 +107,16 @@ if (import.meta.vitest) {
   }
 
   describe('buildIn', () => {
-    it('compiles an array without a null to a plain IN / NOT IN', () => {
+    it('compiles an $in without a null to a plain IN', () => {
       expect(compile(pg, '$in', [1, 2])).toEqual({
         sql: '"age" in ($1, $2)',
         parameters: [1, 2],
       })
+    })
+
+    it('ORs an IS NULL next to $nin when the array has no null', () => {
       expect(compile(pg, '$nin', [1, 2])).toEqual({
-        sql: '"age" not in ($1, $2)',
+        sql: '("age" not in ($1, $2) or "age" is null)',
         parameters: [1, 2],
       })
     })
