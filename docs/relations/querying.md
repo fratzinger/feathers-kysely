@@ -57,7 +57,7 @@ await app.service("users").find({
 });
 ```
 
-Implemented as "no child exists that does NOT match" — `WHERE NOT EXISTS (SELECT 1 FROM todos WHERE NOT ...)`.
+Implemented as "no child exists that does NOT match" — `WHERE NOT EXISTS (SELECT 1 FROM todos WHERE (...) IS NOT TRUE)`. A child the filter is UNKNOWN for counts as not matching: a todo with a NULL `priority` fails `$every: { priority: { $gt: 1 } }`, just as it fails `$some` with the same filter.
 
 ## Mixed chains
 

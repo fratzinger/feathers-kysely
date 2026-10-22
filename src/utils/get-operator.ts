@@ -26,6 +26,19 @@ export const OPERATORS: Record<string, ComparisonOperatorExpression> = {
 // LIKE on the other dialects instead.
 export const POSTGRES_ONLY_OPERATORS = ['$contains', '$contained', '$overlap']
 
+// Negated operators a NULL row satisfies: a NULL is not 25, not like 'a%', not
+// between 1 and 5 — yet SQL evaluates each of them to UNKNOWN for it and drops
+// the row. `buildPropertyExpression` ORs an `IS NULL` next to them, so each one
+// is the exact complement of its positive twin, as in MongoDB. `$nin` is not
+// listed: `buildIn` does the same, and also has to handle a null in the list.
+export const NEGATED_OPERATORS = [
+  '$ne',
+  '$notLike',
+  '$notILike',
+  '$notBetween',
+  '$notRegex',
+]
+
 // Operators handled by special branches in `buildPropertyExpression` (i.e. NOT
 // in the OPERATORS map), grouped by dialect availability so the constructor can
 // register exactly the ones each dialect supports. Unregistered operators are

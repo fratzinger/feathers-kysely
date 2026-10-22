@@ -10,11 +10,17 @@ interface UsersTable {
   id: Generated<number>
   name: string
   age: number | null
+  nick: string | null
 }
 interface DB {
   users: UsersTable
 }
-type User = { id: number; name: string; age: number | null }
+type User = {
+  id: number
+  name: string
+  age: number | null
+  nick?: string | null
+}
 
 function setup() {
   const db = new Kysely<DB>({ dialect: dialect() })
@@ -25,7 +31,8 @@ function setup() {
       db.schema
         .createTable('users')
         .addColumn('name', 'text', (col) => col.notNull())
-        .addColumn('age', 'integer'),
+        .addColumn('age', 'integer')
+        .addColumn('nick', 'text'),
       'id',
     ).execute()
   }
@@ -34,7 +41,7 @@ function setup() {
     Model: db,
     name: 'users',
     multi: true,
-    properties: { id: true, name: true, age: true },
+    properties: { id: true, name: true, age: true, nick: true },
   })
 
   const app = feathers<{ users: typeof users }>().use('users', users)
@@ -141,6 +148,47 @@ describe('query operators (cross-dialect)', () => {
       expect(result.map((u) => u.name)).toEqual(['c'])
     })
 
+    it('partitions the rows with its condition, NULL rows included', async () => {
+      await app.service('users').create([
+        { name: 'a', age: 10, nick: 'al' },
+        { name: 'b', age: 20, nick: null },
+        { name: 'c', age: null, nick: 'cy' },
+      ])
+
+      const names = async (query: Record<string, any>) =>
+        (
+          await app.service('users').find({
+            query: { ...query, $sort: { name: 1 } },
+            paginate: false,
+          })
+        ).map((u) => u.name)
+
+      // Every row matches either the condition or its $not, never both or
+      // neither. A bare NOT (age > 15) is UNKNOWN for 'c' and would drop it
+      // from both sides.
+      const conditions: Record<string, any>[] = [
+        { age: 20 },
+        { age: { $gt: 15 } },
+        { age: { $ne: 20 } },
+        { age: { $in: [null, 10] } },
+        { age: { $nin: [10] } },
+        { age: { $notBetween: [15, 25] } },
+        { nick: { $like: 'a%' } },
+        { nick: { $notLike: 'a%' } },
+        { age: { $gt: 15 }, nick: 'cy' },
+        { $or: [{ age: 10 }, { nick: 'cy' }] },
+      ]
+
+      for (const condition of conditions) {
+        const matching = await names(condition)
+        const rest = await names({ $not: condition })
+        expect(
+          [...matching, ...rest].sort(),
+          JSON.stringify(condition),
+        ).toEqual(['a', 'b', 'c'])
+      }
+    })
+
     it('with an empty condition is a no-op', async () => {
       await app.service('users').create([
         { name: 'a', age: 10 },
@@ -200,6 +248,33 @@ describe('query operators (cross-dialect)', () => {
       paginate: false,
     })
     expect(res.map((u) => u.name)).toEqual(['World'])
+  })
+
+  it('negated operators match NULL rows', async () => {
+    await app.service('users').create([
+      { name: 'a', age: 10, nick: 'al' },
+      { name: 'b', age: null, nick: null },
+    ])
+
+    // A NULL is not 10, not like 'a%', not between 5 and 15 — although SQL
+    // evaluates each of those comparisons to UNKNOWN for it.
+    const queries: Record<string, any>[] = [
+      { age: { $ne: 10 } },
+      { age: { $nin: [10] } },
+      { age: { $notBetween: [5, 15] } },
+      { nick: { $notLike: 'a%' } },
+      { nick: { $notILike: 'A%' } },
+    ]
+    // No REGEXP on SQLite (see below).
+    if (dialectName !== 'sqlite') queries.push({ nick: { $notRegex: '^a' } })
+
+    for (const query of queries) {
+      const res = await app.service('users').find({ query, paginate: false })
+      expect(
+        res.map((u) => u.name),
+        JSON.stringify(query),
+      ).toEqual(['b'])
+    }
   })
 
   // Postgres (~/!~) and MySQL (REGEXP) support regex; SQLite has no built-in
@@ -262,20 +337,31 @@ describe('query operators (cross-dialect)', () => {
       expect(res.map((u) => u.name)).toEqual(['none', 'one'])
     })
 
-    it('an array without a null is unaffected', async () => {
+    it('an array without a null', async () => {
       const inRes = await app.service('users').find({
         query: { age: { $in: [1, 2] }, $sort: { name: 1 } },
         paginate: false,
       })
       expect(inRes.map((u) => u.name)).toEqual(['one', 'two'])
 
-      // NULL rows stay excluded from a plain $nin — `age <> 1` is UNKNOWN for
-      // them, which is both standard SQL and what Mongo does.
+      // A NULL is not 1, so it matches a plain $nin, as in Mongo — although
+      // `age NOT IN (1)` alone is UNKNOWN for it.
       const ninRes = await app.service('users').find({
         query: { age: { $nin: [1] }, $sort: { name: 1 } },
         paginate: false,
       })
-      expect(ninRes.map((u) => u.name)).toEqual(['two'])
+      expect(ninRes.map((u) => u.name)).toEqual(['none', 'two'])
+    })
+
+    it('$not over $nin / $ne leaves only the matching value', async () => {
+      // NOT (age NOT IN (1) OR age IS NULL) — the NULL row stays out.
+      for (const age of [{ $nin: [1] }, { $ne: 1 }]) {
+        const res = await app.service('users').find({
+          query: { $not: { age } },
+          paginate: false,
+        })
+        expect(res.map((u) => u.name)).toEqual(['one'])
+      }
     })
 
     it('composes with $not (De Morgan over the null branch)', async () => {
