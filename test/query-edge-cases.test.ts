@@ -142,6 +142,28 @@ describe('query edge cases', () => {
     assert.strictEqual(result[0].name, 'Alice')
   })
 
+  it('$and nested in a top-level $or', async () => {
+    await app.service('users').create([
+      { name: 'Alice', age: 30 },
+      { name: 'Alice', age: 25 },
+      { name: 'Bob', age: 25 },
+    ])
+    const result = await app.service('users').find({
+      query: {
+        $or: [{ $and: [{ name: 'Alice' }, { age: 30 }] }, { name: 'Bob' }],
+        $sort: { name: 1 },
+      },
+      paginate: false,
+    })
+    assert.deepStrictEqual(
+      result.map((user) => [user.name, user.age]),
+      [
+        ['Alice', 30],
+        ['Bob', 25],
+      ],
+    )
+  })
+
   it('$and with overlapping range conditions', async () => {
     await app.service('users').create([
       { name: 'Alice', age: 30 },
