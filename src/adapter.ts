@@ -155,6 +155,7 @@ export class KyselyAdapter<
           '$some',
           '$every',
           '$not',
+          '$and',
         ]),
       ],
     })
