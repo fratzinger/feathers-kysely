@@ -26,6 +26,9 @@ describe('exports', () => {
         // transactions/with-transaction.ts
         'withTransaction',
 
+        // transactions/run-in-transaction.ts
+        'runInTransaction',
+
         // transactions/after-commit.ts
         'afterCommit',
 

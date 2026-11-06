@@ -3,6 +3,7 @@ import type { HookContext } from '@feathersjs/feathers'
 import type { KyselyAdapterParams } from '../declarations.js'
 import {
   commitTransaction,
+  getKysely,
   rollbackTransaction,
   startTransaction,
 } from './lifecycle.js'
@@ -16,7 +17,11 @@ const debug = createDebug('feathers-kysely-transaction')
 export const trxStart =
   () =>
   async (context: HookContext): Promise<void> => {
-    const transaction = await startTransaction(context, false)
+    const transaction = await startTransaction(
+      (context.params as KyselyAdapterParams).transaction,
+      () => getKysely(context),
+      false,
+    )
 
     if (!transaction) {
       return

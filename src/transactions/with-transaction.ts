@@ -5,6 +5,7 @@ import { deferEvent } from './defer-event.js'
 import {
   commitTransaction,
   flushDeferredEvents,
+  getKysely,
   markRollbackOnly,
   rollbackTransaction,
   startTransaction,
@@ -77,7 +78,11 @@ export const withTransaction =
       return
     }
 
-    const transaction = await startTransaction(context, true)
+    const transaction = await startTransaction(
+      parent,
+      () => getKysely(context),
+      true,
+    )
 
     if (!transaction) {
       await next()

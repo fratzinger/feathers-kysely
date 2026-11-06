@@ -2,13 +2,10 @@ import { createDebug } from '@feathersjs/commons'
 import { GeneralError } from '@feathersjs/errors'
 import type { HookContext } from '@feathersjs/feathers'
 import type { ControlledTransaction, Kysely, KyselyPlugin } from 'kysely'
-import type {
-  KyselyAdapterParams,
-  KyselyAdapterTransaction,
-} from '../declarations.js'
+import type { KyselyAdapterTransaction } from '../declarations.js'
 
-// The lifecycle of a transaction, shared by `withTransaction()` and the legacy
-// hooks. Internal: `index.ts` exports only `getKysely`.
+// The lifecycle of a transaction, shared by `withTransaction()`, the legacy
+// hooks and `runInTransaction()`. Internal: `index.ts` exports only `getKysely`.
 
 const debug = createDebug('feathers-kysely-transaction')
 
@@ -93,17 +90,16 @@ const refuseAfterEnd = (root: KyselyAdapterTransaction): KyselyPlugin => ({
 })
 
 /**
- * Starts a root transaction (`startTransaction()`) or, when an existing
- * `params.transaction` is found, a nested transaction backed by a savepoint
- * (`savepoint()`). Returns `undefined` (caller should pass through) when no
- * Kysely instance / transaction is available.
+ * Starts a root transaction (`startTransaction()`) or, within `parent`, a
+ * nested transaction backed by a savepoint (`savepoint()`). Returns `undefined`
+ * (caller should pass through) when there is neither a parent nor a Kysely
+ * instance.
  */
 export const startTransaction = async (
-  context: HookContext,
+  parent: KyselyAdapterTransaction | undefined,
+  getDb: () => Kysely<any> | undefined,
   withDeferred: boolean,
 ): Promise<KyselyAdapterTransaction | undefined> => {
-  const { transaction: parent } = context.params as KyselyAdapterParams
-
   let trx: ControlledTransaction<any>
   let savepoint: string | undefined
 
@@ -124,7 +120,7 @@ export const startTransaction = async (
     // ended. The root's does, and carries the guard of `refuseAfterEnd()`.
     trx = parent.trx
   } else {
-    const db = getKysely(context)
+    const db = getDb()
     if (!db) {
       return undefined
     }

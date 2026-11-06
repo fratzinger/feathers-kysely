@@ -147,6 +147,34 @@ awaited can't be told apart from the root's own work: it is refused only once
 the transaction ended. Await every nested call before the call that started the
 transaction returns.
 
+## Without a hook: `runInTransaction()`
+
+`withTransaction()` engages only for `create`/`update`/`patch`/`remove`, and
+for the whole call. `runInTransaction()` starts the same root transaction where
+no hook wraps the work — a custom method, a script — or where slow work comes
+first and the transaction should open only once it's done:
+
+```ts
+import { runInTransaction } from "@fratzinger/feathers-kysely";
+
+async import(data, params) {
+  const rows = await geocodeAll(data.rows); // slow: before the transaction
+
+  return runInTransaction(db, async (transaction) => {
+    await app.service("contacts").create(rows, { ...params, transaction });
+    await app.service("imports").patch(data.id, { done: true }, { transaction });
+    return { created: rows.length };
+  });
+}
+```
+
+It behaves like a root started by `withTransaction()`: it commits once the
+action resolves and rolls back when it throws. Calls that forward the
+transaction join it, or open a savepoint with `withTransaction({ nested:
+'savepoint' })`; a joined call that failed rolls the transaction back, even when
+the action caught its error. With `withTransaction()` on their services, the
+calls' events go out after the commit, and not at all after a rollback.
+
 ## After the commit: `afterCommit()`
 
 Some side effects can't be rolled back — a push notification, a cache
@@ -246,7 +274,8 @@ try {
 
 A transaction passed in by hand is yours to commit: a call that joined it and
 failed can't hold back your `commit()`. Roll back when a call failed, even one
-whose error you caught.
+whose error you caught. Events aren't deferred either — `runInTransaction()`
+does both for you.
 
 ## Savepoints: `nested: 'savepoint'`
 
