@@ -1,12 +1,14 @@
 import { createDebug } from '@feathersjs/commons'
 import { GeneralError } from '@feathersjs/errors'
-import type { HookContext, NextFunction } from '@feathersjs/feathers'
+import type { HookContext } from '@feathersjs/feathers'
 import type { ControlledTransaction, Kysely, KyselyPlugin } from 'kysely'
 import type {
   KyselyAdapterParams,
   KyselyAdapterTransaction,
 } from '../declarations.js'
-import { deferEvent } from './defer-event.js'
+
+// The lifecycle of a transaction, shared by `withTransaction()` and the legacy
+// hooks. Internal: `index.ts` exports only `getKysely`.
 
 const debug = createDebug('feathers-kysely-transaction')
 
@@ -28,6 +30,12 @@ const ended = new WeakSet<KyselyAdapterTransaction>()
 
 /** Transactions a joined call failed in: they may only roll back. */
 const rollbackOnly = new WeakSet<KyselyAdapterTransaction>()
+
+export const markRollbackOnly = (
+  transaction: KyselyAdapterTransaction,
+): void => {
+  rollbackOnly.add(transaction)
+}
 
 /** Transactions rolled back already. */
 const rolledBack = new WeakSet<KyselyAdapterTransaction>()
@@ -90,7 +98,7 @@ const refuseAfterEnd = (root: KyselyAdapterTransaction): KyselyPlugin => ({
  * (`savepoint()`). Returns `undefined` (caller should pass through) when no
  * Kysely instance / transaction is available.
  */
-const startTransaction = async (
+export const startTransaction = async (
   context: HookContext,
   withDeferred: boolean,
 ): Promise<KyselyAdapterTransaction | undefined> => {
@@ -160,7 +168,7 @@ const startTransaction = async (
   return transaction
 }
 
-const commitTransaction = async (
+export const commitTransaction = async (
   transaction: KyselyAdapterTransaction,
 ): Promise<void> => {
   const { trx, id, savepoint, savepoints, parent, resolve } = transaction
@@ -209,7 +217,7 @@ const commitTransaction = async (
   debug('ended transaction %s', id)
 }
 
-const rollbackTransaction = async (
+export const rollbackTransaction = async (
   transaction: KyselyAdapterTransaction,
 ): Promise<void> => {
   const { trx, id, savepoint, savepoints } = transaction
@@ -265,7 +273,9 @@ const rollbackTransaction = async (
  * transaction. No-op for nested (savepoint) transactions and for legacy
  * transactions that never deferred events.
  */
-const flushDeferredEvents = (transaction: KyselyAdapterTransaction): void => {
+export const flushDeferredEvents = (
+  transaction: KyselyAdapterTransaction,
+): void => {
   if (transaction.parent || !transaction.deferredEvents) {
     return
   }
@@ -280,158 +290,3 @@ const flushDeferredEvents = (transaction: KyselyAdapterTransaction): void => {
     }
   }
 }
-
-/**
- * @deprecated Use the `withTransaction()` around hook instead. Kept for
- * backward compatibility; this legacy hook does NOT defer cross-service events.
- */
-export const trxStart =
-  () =>
-  async (context: HookContext): Promise<void> => {
-    const transaction = await startTransaction(context, false)
-
-    if (!transaction) {
-      return
-    }
-
-    context.params = { ...context.params, transaction }
-    debug('started a new transaction %s', transaction.id)
-  }
-
-/**
- * @deprecated Use the `withTransaction()` around hook instead. Kept for
- * backward compatibility; this legacy hook does NOT defer cross-service events.
- */
-export const trxCommit = () => async (context: HookContext) => {
-  const { transaction } = context.params as KyselyAdapterParams
-
-  if (!transaction) {
-    return
-  }
-
-  context.params = { ...context.params, transaction: transaction.parent }
-
-  await commitTransaction(transaction)
-
-  return context
-}
-
-/**
- * @deprecated Use the `withTransaction()` around hook instead. Kept for
- * backward compatibility; this legacy hook does NOT defer cross-service events.
- */
-export const trxRollback = () => async (context: HookContext) => {
-  const { transaction } = context.params as KyselyAdapterParams
-
-  if (!transaction) {
-    return
-  }
-
-  context.params = { ...context.params, transaction: transaction.parent }
-
-  await rollbackTransaction(transaction)
-
-  return context
-}
-
-const MUTATING_METHODS = new Set(['create', 'update', 'patch', 'remove'])
-
-export type WithTransactionOptions = {
-  /**
-   * Without a transaction: start one (default), or run without one — for a
-   * service only ever called within another call's transaction.
-   *
-   * @default true
-   */
-  start?: boolean
-  /**
-   * Within a transaction (a call forwarding `params.transaction`): `join` it
-   * (default) — parallel-safe; a failure leaves the transaction rollback-only,
-   * even when the caller catches it — or a `savepoint` of its own: a failure
-   * rolls back only this call and the caller may go on, but nested calls can't
-   * run in parallel. Either way the call's event waits for the root's commit.
-   *
-   * @default 'join'
-   */
-  nested?: 'savepoint' | 'join'
-}
-
-/**
- * Around hook that wraps a service method in a Kysely `ControlledTransaction`:
- * start → commit on success → rollback on error. Nested calls that forward
- * `params.transaction` join it, or open a savepoint (`nested: 'savepoint'`). Feathers
- * service events (`created`/`updated`/`patched`/`removed`) are deferred and only
- * emitted once the root transaction commits — and discarded on rollback —
- * including events from nested cross-service calls.
- *
- * Register per method (`around: { create: [withTransaction()] }`) or, for full
- * cross-service deferral, app-wide (`app.hooks({ around: [withTransaction()] })`).
- * Only engages for `create`/`update`/`patch`/`remove`; every other method and
- * any non-Kysely / transaction-incapable service is a transparent passthrough.
- */
-export const withTransaction =
-  (options?: WithTransactionOptions) =>
-  async (context: HookContext, next: NextFunction): Promise<void> => {
-    if (!MUTATING_METHODS.has(context.method)) {
-      await next()
-      return
-    }
-
-    const parent = (context.params as KyselyAdapterParams).transaction
-
-    if (parent && options?.nested !== 'savepoint') {
-      try {
-        await next()
-      } catch (error) {
-        // There is no savepoint to roll back to. Whether the caller catches
-        // the error or not, the transaction must not commit what this call
-        // wrote — nor, on PostgreSQL, end in a COMMIT that silently rolls back
-        // a transaction aborted by a failed statement.
-        rollbackOnly.add(parent)
-        throw error
-      }
-      deferEvent(context, parent)
-      return
-    }
-
-    if (!parent && options?.start === false) {
-      await next()
-      return
-    }
-
-    const transaction = await startTransaction(context, true)
-
-    if (!transaction) {
-      await next()
-      return
-    }
-
-    context.params = { ...context.params, transaction }
-    debug('started a new transaction %s', transaction.id)
-
-    try {
-      await next()
-
-      // The call that started the root leaves its event to Feathers, which
-      // emits it once every hook of the call is done — after the commit, and
-      // not at all after a rollback.
-      if (parent) {
-        deferEvent(context, transaction)
-      }
-
-      context.params = { ...context.params, transaction: parent }
-      await commitTransaction(transaction)
-    } catch (error) {
-      context.params = { ...context.params, transaction: parent }
-      try {
-        await rollbackTransaction(transaction)
-      } catch (rollbackError) {
-        debug('rollback after error failed %o', rollbackError)
-      }
-      throw error
-    }
-
-    // Reached only on the success path (the catch above rethrows). Emit the
-    // deferred events now that the (root) transaction is durably committed.
-    flushDeferredEvents(transaction)
-  }
