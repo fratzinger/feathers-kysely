@@ -12,6 +12,7 @@ import {
   trxCommit,
   trxRollback,
   withTransaction,
+  runInTransaction,
 } from '../src/index.js'
 import type { KyselyAdapterTransaction } from '../src/index.js'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1665,9 +1666,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       await (app.service('b') as any).create({ x: 2 }, nested)
     }
     app.service('a').hooks({ around: { create: [withTransaction()] } })
-    app
-      .service('b')
-      .hooks({ around: { create: [withTransaction({ nested: 'savepoint' })] } })
+    app.service('b').hooks({
+      around: { create: [withTransaction({ nested: 'savepoint' })] },
+    })
 
     await app.service('a').create({ a: 1 })
 
@@ -1696,9 +1697,9 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
     app.service('a').hooks({ around: { create: [withTransaction()] } })
-    app
-      .service('b')
-      .hooks({ around: { create: [withTransaction({ nested: 'savepoint' })] } })
+    app.service('b').hooks({
+      around: { create: [withTransaction({ nested: 'savepoint' })] },
+    })
 
     await expect(app.service('a').create({ a: 1 })).rejects.toThrow(
       'still running',
@@ -1887,6 +1888,102 @@ describe('withTransaction event deferral (stubbed transaction)', () => {
       )
 
       expect(log).toEqual(['create', 'create', 'caught', 'rollback:root'])
+    })
+  })
+
+  describe('runInTransaction()', () => {
+    const stubDb = (log: string[], fail: Failures = {}) =>
+      ({
+        startTransaction: () => ({
+          execute: async () => makeTrx(log, 'root', fail),
+        }),
+      }) as any
+
+    /** `s` behind `withTransaction(options)`, its event logged. */
+    function setup(options?: Parameters<typeof withTransaction>[0]) {
+      const log: string[] = []
+      const s = new StubService(log)
+      const app = appWith(['s', s])
+      app.service('s').hooks({ around: { create: [withTransaction(options)] } })
+      app.service('s').on('created', () => log.push('event'))
+      return { log, s, service: app.service('s') as any }
+    }
+
+    it('commits once the action resolves, then emits the events of the calls within it', async () => {
+      const { log, service } = setup()
+
+      const result = await runInTransaction(
+        stubDb(log),
+        async (transaction) => {
+          await service.create({ x: 1 }, { transaction })
+          log.push('done')
+          return 'result'
+        },
+      )
+
+      expect(result).toBe('result')
+      expect(log).toEqual(['create', 'done', 'commit:root', 'event'])
+    })
+
+    it('rolls back and emits nothing when the action throws', async () => {
+      const { log, service } = setup()
+      let committed: Promise<unknown> | undefined
+
+      await expect(
+        runInTransaction(stubDb(log), async (transaction) => {
+          committed = transaction.committed
+          await service.create({ x: 1 }, { transaction })
+          throw new Error('boom')
+        }),
+      ).rejects.toThrow('boom')
+
+      expect(await committed).toBe(false)
+      expect(log).toEqual(['create', 'rollback:root'])
+    })
+
+    it('rolls back when a call that joined failed, though the action caught it', async () => {
+      const { log, s, service } = setup()
+      s.failCreate = true
+
+      await expect(
+        runInTransaction(stubDb(log), async (transaction) => {
+          await service
+            .create({ x: 1 }, { transaction })
+            .catch(() => log.push('caught'))
+        }),
+      ).rejects.toThrow('rolls back rather than commit')
+
+      expect(log).toEqual(['create', 'caught', 'rollback:root'])
+    })
+
+    it('a call with a savepoint of its own rolls back alone, the rest commits', async () => {
+      const { log, s, service } = setup({ nested: 'savepoint' })
+      s.failCreate = true
+
+      await runInTransaction(stubDb(log), async (transaction) => {
+        await service
+          .create({ x: 1 }, { transaction })
+          .catch(() => log.push('caught'))
+      })
+
+      expect(log).toEqual([
+        'create',
+        'rollback:root>sp',
+        'caught',
+        'commit:root',
+      ])
+    })
+
+    it('a failing COMMIT rejects, rolls back and emits nothing', async () => {
+      const { log, service } = setup()
+
+      await expect(
+        runInTransaction(stubDb(log, { commit: true }), async (transaction) => {
+          await service.create({ x: 1 }, { transaction })
+        }),
+      ).rejects.toThrow('commit failed')
+
+      expect(log).toEqual(['create', 'commit:root', 'rollback:root'])
     })
   })
 })

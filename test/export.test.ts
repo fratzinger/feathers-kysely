@@ -15,14 +15,21 @@ describe('exports', () => {
         // service.ts
         'KyselyService',
 
-        // hooks/with-transaction.ts
+        // transactions/lifecycle.ts
         'getKysely',
+
+        // transactions/legacy.ts
         'trxCommit',
         'trxRollback',
         'trxStart',
+
+        // transactions/with-transaction.ts
         'withTransaction',
 
-        // hooks/after-commit.ts
+        // transactions/run-in-transaction.ts
+        'runInTransaction',
+
+        // transactions/after-commit.ts
         'afterCommit',
 
         // hooks/update-operators.ts

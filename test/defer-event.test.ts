@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { deferEvent } from '../src/hooks/defer-event.js'
+import { deferEvent } from '../src/transactions/defer-event.js'
 import type { KyselyAdapterTransaction } from '../src/index.js'
 
 /** A call's context after the method ran, as far as `deferEvent` reads it. */
