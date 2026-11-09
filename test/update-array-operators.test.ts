@@ -17,6 +17,7 @@ describe.skipIf(dialectName !== 'postgres')(
         id: Generated<number>
         tags: string[]
         labels: any
+        devices: any
       }
     }
     const db = new Kysely<DB>({ dialect: dialect() })
@@ -28,6 +29,7 @@ describe.skipIf(dialectName !== 'postgres')(
         .addColumn('id', 'serial', (c) => c.primaryKey())
         .addColumn('tags', sql`text[]`)
         .addColumn('labels', 'jsonb')
+        .addColumn('devices', 'jsonb')
         .execute()
     }
 
@@ -39,6 +41,10 @@ describe.skipIf(dialectName !== 'postgres')(
       properties: {
         tags: { type: 'array', 'x-db-type': 'text[]' },
         labels: { type: 'array', 'x-db-type': 'jsonb' },
+        // nullable, as schema builders emit it: the type sits on the non-null branch
+        devices: {
+          anyOf: [{ type: 'array', 'x-db-type': 'jsonb' }, { type: 'null' }],
+        },
       },
     })
     const app = feathers().use('arr_test', service)
@@ -47,15 +53,19 @@ describe.skipIf(dialectName !== 'postgres')(
     beforeEach(clean)
     afterAll(() => db.destroy())
 
-    const seed = async (tags: string[] | null, labels: any[] | null) => {
+    const jsonb = (value: any[] | null) =>
+      value === null ? null : (sql`${JSON.stringify(value)}::jsonb` as any)
+    const seed = async (
+      tags: string[] | null,
+      labels: any[] | null,
+      devices: any[] | null = null,
+    ) => {
       const row = await db
         .insertInto('arr_test')
         .values({
           tags: tags as any,
-          labels:
-            labels === null
-              ? null
-              : (sql`${JSON.stringify(labels)}::jsonb` as any),
+          labels: jsonb(labels),
+          devices: jsonb(devices),
         })
         .returning('id')
         .executeTakeFirstOrThrow()
@@ -175,6 +185,41 @@ describe.skipIf(dialectName !== 'postgres')(
       const row = await read(id)
       expect(row.tags).toBeNull()
       expect(row.labels).toBeNull()
+    })
+
+    it('$push on a nullable jsonb column starts an array, then appends', async () => {
+      const id = await seed([], [])
+      await app
+        .service('arr_test')
+        .patch(id, { $push: { devices: { endpoint: 'a' } } } as any)
+      await app
+        .service('arr_test')
+        .patch(id, { $push: { devices: { endpoint: 'b' } } } as any)
+      expect((await read(id)).devices).toEqual([
+        { endpoint: 'a' },
+        { endpoint: 'b' },
+      ])
+    })
+
+    it('$pull on a nullable jsonb column removes whole objects', async () => {
+      const a = { endpoint: 'a', keys: { auth: '1' } }
+      const b = { endpoint: 'b', keys: { auth: '2' } }
+      const id = await seed([], [], [a, b])
+      // jsonb ignores key order; a partial object matches nothing
+      await app.service('arr_test').patch(id, {
+        $pull: {
+          devices: [{ keys: { auth: '1' }, endpoint: 'a' }, { endpoint: 'b' }],
+        },
+      } as any)
+      expect((await read(id)).devices).toEqual([b])
+    })
+
+    it('$pull on a nullable jsonb column holding NULL leaves it NULL', async () => {
+      const id = await seed([], [])
+      await app
+        .service('arr_test')
+        .patch(id, { $pull: { devices: { endpoint: 'a' } } } as any)
+      expect((await read(id)).devices).toBeNull()
     })
   },
 )

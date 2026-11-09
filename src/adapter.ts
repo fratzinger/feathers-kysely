@@ -43,6 +43,7 @@ import {
   conflictKey,
   convertBooleansToNumbers,
   findDuplicateConflictKey,
+  getAnnotatedDbType,
   getDatabaseDialect,
   NON_SQLITE_OPERATORS,
   OPERATORS,
@@ -315,19 +316,13 @@ export class KyselyAdapter<
    * temporal date coercion. An explicit `getPropertyType` option wins; when it
    * is absent (or returns `undefined`) we fall back to an `x-db-type`
    * annotation on the column's entry in `properties` (typically the service's
-   * JSON schema `properties` block).
+   * JSON schema `properties` block), or on the non-null branch of a nullable one.
    */
   getPropertyType(property: string): string | undefined {
     const explicit = this.options.getPropertyType?.(property)
     if (explicit != null) return explicit
 
-    const meta = this.propertyMap.get(property)
-    if (meta && typeof meta === 'object') {
-      const annotated = (meta as Record<string, any>)['x-db-type']
-      if (typeof annotated === 'string') return annotated
-    }
-
-    return undefined
+    return getAnnotatedDbType(this.propertyMap.get(property))
   }
 
   /** `qualifyColumn` bound to this service's table and declared columns. */
