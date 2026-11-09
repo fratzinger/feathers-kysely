@@ -45,10 +45,11 @@ class MyService extends KyselyAdapter {
 
 ## Declaring column types
 
-Two features need to know a column's underlying database type:
+Three features need to know a column's underlying database type:
 
 - **JSON columns** — to query into a `json`/`jsonb` column with [dot notation](./operators#querying-json-columns).
 - **Temporal columns** — to enable [type-aware date coercion](./operators#querying-dates-timestamps).
+- **Array columns** — for the [array update operators](./update-operators#column-type-detection).
 
 You can declare the type in either of two ways. The declarative `x-db-type`
 annotation lives on the column's entry in `properties` (which is typically your
@@ -67,6 +68,11 @@ new KyselyService({
   },
 });
 ```
+
+A nullable column may carry the annotation on its non-null branch, the shape
+schema builders emit for one (TypeBox's `Type.Union([T, Type.Null()])`):
+`{ anyOf: [{ type: "array", "x-db-type": "jsonb" }, { type: "null" }] }`. A
+union of several non-null branches is ambiguous and counts as unannotated.
 
 The imperative `getPropertyType` function is the alternative (and escape hatch).
 It takes precedence over `x-db-type`; return `undefined` to fall back to the

@@ -64,6 +64,7 @@ const clean = async () => {
 const app = feathers<{
   annotated: KyselyService<Row>
   fnOverride: KyselyService<Row>
+  nullable: KyselyService<Row>
   raw: KyselyService<Row>
 }>()
   // Coercion declared purely via the `x-db-type` annotation, no function.
@@ -101,6 +102,26 @@ const app = feathers<{
       },
     }),
   )
+  // The annotation on the non-null branch of a nullable union, the shape schema
+  // builders emit for a nullable column.
+  .use(
+    'nullable',
+    new KyselyService<Row>({
+      Model: db,
+      id: 'id',
+      name: 'xdates',
+      multi: true,
+      properties: {
+        tstz: {
+          anyOf: [
+            { type: 'string', format: 'date-time', 'x-db-type': 'timestamptz' },
+            { type: 'null' },
+          ],
+        },
+        plain: true,
+      },
+    }),
+  )
   // No declared types at all — used to prove coercion is opt-in.
   .use(
     'raw',
@@ -121,7 +142,7 @@ const seed = () =>
   )
 
 const eqCount = async (
-  service: 'annotated' | 'fnOverride' | 'raw',
+  service: 'annotated' | 'fnOverride' | 'nullable' | 'raw',
   column: 'tstz' | 'plain',
   value: unknown,
 ) =>
@@ -140,6 +161,10 @@ describe(`x-db-type annotation (${dialectName})`, () => {
 
   it('coerces epoch-ms via the x-db-type annotation alone', async () => {
     expect(await eqCount('annotated', 'tstz', asMs(T))).toBe(1)
+  })
+
+  it('reads the annotation off the non-null branch of a nullable union', async () => {
+    expect(await eqCount('nullable', 'tstz', asMs(T))).toBe(1)
   })
 
   it('is opt-in: an unannotated column is not coerced', async () => {
