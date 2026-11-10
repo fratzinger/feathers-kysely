@@ -42,7 +42,7 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
    * The columns a unique or exclusion violation may name to the client, in
    * `Conflict#data.columns`, e.g. to show which field is taken. Naming one can
    * reveal that a value exists (an email, a token), so none are by default.
-   * Postgres only.
+   * Postgres and SQLite; MySQL names the violated index, not its columns.
    */
   exposeConflictColumns?: readonly string[]
 }

@@ -40,27 +40,57 @@ export interface ErrorHandlerOptions {
   /**
    * The columns a unique or exclusion violation may name to the client, in
    * `Conflict#data.columns`. Naming one can reveal that a value exists (an
-   * email, a token), so none are by default. Postgres only.
+   * email, a token), so none are by default. Postgres and SQLite; MySQL names
+   * the violated index, not its columns.
    */
   exposeConflictColumns?: readonly string[]
 }
+
+/**
+ * The client-facing message of a unique violation on every dialect: Postgres'
+ * with the constraint name stripped. MySQL's names the duplicate value and the
+ * table, SQLite's the table.
+ */
+const UNIQUE_VIOLATION = 'duplicate key value violates unique constraint'
 
 // `Key (email, "tenantId")=(...)`: the columns of the violated key, before its values
 const PG_CONFLICT_KEY = /^Key \((.+?)\)=\(/
 const PG_QUOTED = /^"(.*)"$/
 
-/** The exposed columns a violation's `detail` names, never their values. */
-function conflictColumns(
-  detail: unknown,
-  exposed: readonly string[] | undefined,
-): string[] {
-  if (!exposed?.length || typeof detail !== 'string') return []
+// `UNIQUE constraint failed: users.email, users.tenantId`, or `index 'name'`
+// for an index on an expression
+const SQLITE_CONFLICT_KEY = /^UNIQUE constraint failed: (.+)$/
+
+// better-sqlite3's extended result codes of a unique violation
+const SQLITE_UNIQUE_VIOLATION = new Set([
+  'SQLITE_CONSTRAINT_UNIQUE',
+  'SQLITE_CONSTRAINT_PRIMARYKEY',
+])
+
+/** The violated key's columns in a Postgres `detail`, never their values. */
+function pgKeyColumns(detail: unknown): string[] {
+  if (typeof detail !== 'string') return []
   const key = PG_CONFLICT_KEY.exec(detail)?.[1]
   if (!key) return []
-  return key
-    .split(', ')
-    .map((column) => column.replace(PG_QUOTED, '$1'))
-    .filter((column) => exposed.includes(column))
+  return key.split(', ').map((column) => column.replace(PG_QUOTED, '$1'))
+}
+
+/** The violated key's columns in a SQLite message, without their table. */
+function sqliteKeyColumns(message: unknown): string[] {
+  if (typeof message !== 'string') return []
+  const key = SQLITE_CONFLICT_KEY.exec(message)?.[1]
+  if (!key) return []
+  return key.split(', ').map((column) => column.slice(column.indexOf('.') + 1))
+}
+
+/** A unique violation's `Conflict`, naming the key's exposed columns. */
+function conflict(
+  message: string,
+  keyColumns: string[],
+  exposed: readonly string[] | undefined,
+): Conflict {
+  const columns = keyColumns.filter((column) => exposed?.includes(column))
+  return new Conflict(message, columns.length ? { columns } : undefined)
 }
 
 /**
@@ -79,7 +109,10 @@ export function errorHandler(
   const { message } = error
   let feathersError = error
 
-  if (error.sqlState && error.sqlState.length) {
+  if (error.code === 'ER_DUP_ENTRY') {
+    // MySQL's unique violation: `Duplicate entry 'a@b.c' for key 'users.email'`
+    feathersError = new Conflict(UNIQUE_VIOLATION)
+  } else if (error.sqlState && error.sqlState.length) {
     // remove SQLSTATE marker (#) and pad/truncate SQLSTATE to 5 chars
     const sqlState = ('00000' + error.sqlState.replace('#', '')).slice(-5)
 
@@ -134,6 +167,12 @@ export function errorHandler(
         feathersError = new GeneralError(message)
         break
     }
+  } else if (SQLITE_UNIQUE_VIOLATION.has(error.code)) {
+    feathersError = conflict(
+      UNIQUE_VIOLATION,
+      sqliteKeyColumns(message),
+      options?.exposeConflictColumns,
+    )
   } else if (
     typeof error.code === 'string' &&
     error.severity &&
@@ -148,13 +187,10 @@ export function errorHandler(
 
     if (error.code === '23505' || error.code === '23P01') {
       // unique_violation / exclusion_violation
-      const columns = conflictColumns(
-        error.detail,
-        options?.exposeConflictColumns,
-      )
-      feathersError = new Conflict(
+      feathersError = conflict(
         safe,
-        columns.length ? { columns } : undefined,
+        pgKeyColumns(error.detail),
+        options?.exposeConflictColumns,
       )
     } else {
       switch (error.code.slice(0, 2)) {

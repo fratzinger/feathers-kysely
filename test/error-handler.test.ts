@@ -266,6 +266,65 @@ describe('Kysely Error handler', () => {
 
       assert.strictEqual(err.data, undefined)
     })
+
+    it('names the exposed ones on SQLite, without their table', () => {
+      const error = {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+        message: 'UNIQUE constraint failed: items.email, items.tenantId',
+      }
+      const err = conflictOf(error, ['email'])
+
+      assert.strictEqual(err.name, 'Conflict')
+      assert.strictEqual(
+        err.message,
+        'duplicate key value violates unique constraint',
+      )
+      assert.deepStrictEqual(err.data, { columns: ['email'] })
+      assert.strictEqual(err[ERROR], error)
+      assert.strictEqual(conflictOf(error).data, undefined)
+    })
+
+    it('maps a SQLite primary key violation to Conflict', () => {
+      const err = conflictOf({
+        code: 'SQLITE_CONSTRAINT_PRIMARYKEY',
+        message: 'UNIQUE constraint failed: items.id',
+      })
+
+      assert.strictEqual(err.name, 'Conflict')
+      assert.ok(!err.message.includes('items'))
+    })
+
+    it('names no column of a SQLite index on an expression', () => {
+      const err = conflictOf(
+        {
+          code: 'SQLITE_CONSTRAINT_UNIQUE',
+          message: "UNIQUE constraint failed: index 'items_lower_email'",
+        },
+        ['email'],
+      )
+
+      assert.strictEqual(err.name, 'Conflict')
+      assert.strictEqual(err.data, undefined)
+    })
+
+    it('names none on MySQL, nor the value or the table', () => {
+      const error = {
+        code: 'ER_DUP_ENTRY',
+        errno: 1062,
+        sqlState: '23000',
+        sqlMessage: "Duplicate entry 'a@b.c' for key 'items.email'",
+        message: "Duplicate entry 'a@b.c' for key 'items.email'",
+      }
+      const err = conflictOf(error, ['email'])
+
+      assert.strictEqual(err.name, 'Conflict')
+      assert.strictEqual(
+        err.message,
+        'duplicate key value violates unique constraint',
+      )
+      assert.strictEqual(err.data, undefined)
+      assert.strictEqual(err[ERROR], error)
+    })
   })
 
   describe('non-database and Feathers errors', () => {

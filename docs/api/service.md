@@ -42,7 +42,7 @@ class MyService extends KyselyAdapter {
 | `relations` | `object`              | —          | Relation definitions (see [Relations](../relations/setup)) |
 | `properties` | `object`             | —          | Map of column name → JSON schema property object (typically your service's schema `properties`). Used as the set of known columns and as a declarative source for a column's database type via an [`x-db-type`](#declaring-column-types) annotation |
 | `getPropertyType` | `function`       | —          | Resolve a column's type. Returns `'json'`/`'jsonb'` for JSON columns, or a temporal type (`'date'`, `'timestamp'`, `'timestamptz'`, `'datetime'`) to enable [date coercion](./operators#querying-dates-timestamps). Takes precedence over `x-db-type` |
-| `exposeConflictColumns` | `string[]`  | —          | The columns a unique or exclusion violation may name to the client, in `Conflict#data.columns`, e.g. to show which field is taken. Naming one can reveal that a value exists (an email, a token), so none are by default. Values are never named. Postgres only |
+| `exposeConflictColumns` | `string[]`  | —          | The columns a unique or exclusion violation may name to the client, in `Conflict#data.columns`, e.g. to show which field is taken. Naming one can reveal that a value exists (an email, a token), so none are by default. Values are never named. Postgres and SQLite; MySQL names the violated index, not its columns |
 
 ## Declaring column types
 
