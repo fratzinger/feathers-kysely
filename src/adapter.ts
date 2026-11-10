@@ -109,7 +109,7 @@ export class KyselyAdapter<
   /**
    * Per-instance `.catch()` handler converting database errors into Feathers
    * errors. Passes the known columns (`properties`) so the client-facing
-   * Postgres message keeps declared column names but strips other identifiers.
+   * message keeps declared column names but strips other identifiers.
    */
   private handleError = (error: any): never =>
     errorHandler(error, this.propertyMap, this.options)

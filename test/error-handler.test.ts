@@ -206,6 +206,145 @@ describe('Kysely Error handler', () => {
     })
   })
 
+  describe('mysql message sanitization', () => {
+    const foreignKey =
+      ' (`test`.`children`, CONSTRAINT `children_parent_fk` FOREIGN KEY (`parent_id`) REFERENCES `items` (`id`))'
+
+    it.each([
+      [
+        'ER_NO_DEFAULT_FOR_FIELD',
+        'HY000',
+        "Field 'name' doesn't have a default value",
+        "Field 'name' doesn't have a default value",
+      ],
+      [
+        'ER_CHECK_CONSTRAINT_VIOLATED',
+        'HY000',
+        "Check constraint 'items_chk_1' is violated.",
+        'Check constraint is violated.',
+      ],
+      [
+        'ER_TRUNCATED_WRONG_VALUE_FOR_FIELD',
+        'HY000',
+        "Incorrect integer value: 'abc' for column 'name' at row 1",
+        "Incorrect integer value for column 'name' at row 1",
+      ],
+      [
+        'WARN_DATA_TRUNCATED',
+        '01000',
+        "Data truncated for column 'secret' at row 1",
+        'Data truncated for column at row 1',
+      ],
+      [
+        'ER_NO_REFERENCED_ROW_2',
+        '23000',
+        `Cannot add or update a child row: a foreign key constraint fails${foreignKey}`,
+        'Cannot add or update a child row: a foreign key constraint fails',
+      ],
+      [
+        'ER_ROW_IS_REFERENCED_2',
+        '23000',
+        `Cannot delete or update a parent row: a foreign key constraint fails${foreignKey}`,
+        'Cannot delete or update a parent row: a foreign key constraint fails',
+      ],
+      [
+        'ER_INVALID_JSON_TEXT',
+        '22032',
+        'Invalid JSON text: "Invalid value." at position 0 in value for column \'items.name\'.',
+        'Invalid JSON text: "Invalid value." at position 0 in value for column \'name\'.',
+      ],
+      [
+        'ER_NO_SUCH_TABLE',
+        '42S02',
+        "Table 'test.items' doesn't exist",
+        "Table doesn't exist",
+      ],
+      [
+        'ER_BAD_FIELD_ERROR',
+        '42S22',
+        "Unknown column 'nope' in 'field list'",
+        'Unknown column',
+      ],
+    ])('%s → BadRequest: %s', (code, sqlState, message, safe) => {
+      const error = { code, sqlState, sqlMessage: message, message }
+
+      assert.throws(
+        () => errorHandler(error, new Set(['name'])),
+        (err: any) => {
+          assert.strictEqual(err.name, 'BadRequest')
+          assert.strictEqual(err.message, safe)
+          assert.strictEqual(err[ERROR], error)
+          return true
+        },
+      )
+    })
+  })
+
+  describe('sqlite message sanitization', () => {
+    it.each([
+      [
+        'SQLITE_CONSTRAINT_NOTNULL',
+        'NOT NULL constraint failed: items.name',
+        'NOT NULL constraint failed: name',
+      ],
+      [
+        'SQLITE_CONSTRAINT_NOTNULL',
+        'NOT NULL constraint failed: items.secret',
+        'NOT NULL constraint failed',
+      ],
+      [
+        'SQLITE_CONSTRAINT_CHECK',
+        'CHECK constraint failed: age >= 0',
+        'CHECK constraint failed',
+      ],
+      [
+        'SQLITE_CONSTRAINT_CHECK',
+        'CHECK constraint failed: items_age_check',
+        'CHECK constraint failed',
+      ],
+      [
+        'SQLITE_CONSTRAINT_FOREIGNKEY',
+        'FOREIGN KEY constraint failed',
+        'FOREIGN KEY constraint failed',
+      ],
+      [
+        'SQLITE_CONSTRAINT_DATATYPE',
+        'cannot store TEXT value in INTEGER column items.name',
+        'cannot store TEXT value in INTEGER column name',
+      ],
+      [
+        // a trigger's `RAISE(ABORT, ...)`, worded by the schema's author
+        'SQLITE_CONSTRAINT_TRIGGER',
+        'price must be positive',
+        'price must be positive',
+      ],
+      ['SQLITE_MISMATCH', 'datatype mismatch', 'datatype mismatch'],
+    ])('%s → BadRequest: %s', (code, message, safe) => {
+      const error = { code, message }
+
+      assert.throws(
+        () => errorHandler(error, new Set(['name'])),
+        (err: any) => {
+          assert.strictEqual(err.name, 'BadRequest')
+          assert.strictEqual(err.message, safe)
+          assert.strictEqual(err[ERROR], error)
+          return true
+        },
+      )
+    })
+
+    it('strips the table from a SQLITE_ERROR', () => {
+      assert.throws(
+        () =>
+          errorHandler({
+            code: 'SQLITE_ERROR',
+            message: 'no such table: items',
+          }),
+        { name: 'GeneralError', message: 'no such table' },
+      )
+    })
+  })
+
   describe('the columns a unique violation names', () => {
     const violation = (detail: string, code = '23505') => ({
       code,
