@@ -57,6 +57,7 @@ function setup() {
 
   const app = feathers<{
     error_items: KyselyService<ErrorItem>
+    exposed_items: KyselyService<ErrorItem>
     error_children: KyselyService<ErrorChild>
   }>()
 
@@ -68,6 +69,18 @@ function setup() {
       name: 'error_items',
       multi: true,
       properties: { id: true, name: true, email: true, age: true },
+    }),
+  )
+
+  app.use(
+    'exposed_items',
+    new KyselyService<ErrorItem>({
+      Model: db,
+      id: 'id',
+      name: 'error_items',
+      multi: true,
+      properties: { id: true, name: true, email: true, age: true },
+      exposeConflictColumns: ['email'],
     }),
   )
 
@@ -130,6 +143,24 @@ describe.skipIf(dialectName !== 'postgres')('postgres error handler', () => {
     expect(err.name).toBe('Conflict')
     expect(err.message).toContain('unique constraint')
     expect(err.message).not.toContain('"')
+  })
+
+  it('unique violation names the columns the service exposes', async () => {
+    await app.service('error_items').create({ name: 'a', email: 'x@y.z' })
+
+    const [exposed, unexposed] = await Promise.all([
+      rejection(
+        app.service('exposed_items').create({ name: 'b', email: 'x@y.z' }),
+      ),
+      rejection(
+        app.service('error_items').create({ name: 'c', email: 'x@y.z' }),
+      ),
+    ])
+
+    expect(exposed.name).toBe('Conflict')
+    expect(exposed.data).toEqual({ columns: ['email'] })
+    expect(JSON.stringify(exposed.data)).not.toContain('x@y.z')
+    expect(unexposed.data).toBeUndefined()
   })
 
   it('foreign key violation → BadRequest', async () => {
