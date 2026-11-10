@@ -158,7 +158,7 @@ describe.skipIf(dialectName !== 'postgres')('postgres error handler', () => {
     ])
 
     expect(exposed.name).toBe('Conflict')
-    expect(exposed.data).toEqual({ conflict: ['email'] })
+    expect(exposed.data).toEqual({ columns: ['email'] })
     expect(JSON.stringify(exposed.data)).not.toContain('x@y.z')
     expect(unexposed.data).toBeUndefined()
   })

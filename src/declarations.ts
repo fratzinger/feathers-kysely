@@ -40,7 +40,7 @@ export interface KyselyAdapterOptions extends AdapterServiceOptions {
   getPropertyType?: (property: string) => DbPropertyType | undefined
   /**
    * The columns a unique or exclusion violation may name to the client, in
-   * `Conflict#data.conflict`, e.g. to show which field is taken. Naming one can
+   * `Conflict#data.columns`, e.g. to show which field is taken. Naming one can
    * reveal that a value exists (an email, a token), so none are by default.
    * Postgres only.
    */

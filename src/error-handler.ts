@@ -39,7 +39,7 @@ function sanitizePgMessage(
 export interface ErrorHandlerOptions {
   /**
    * The columns a unique or exclusion violation may name to the client, in
-   * `Conflict#data.conflict`. Naming one can reveal that a value exists (an
+   * `Conflict#data.columns`. Naming one can reveal that a value exists (an
    * email, a token), so none are by default. Postgres only.
    */
   exposeConflictColumns?: readonly string[]
@@ -148,13 +148,13 @@ export function errorHandler(
 
     if (error.code === '23505' || error.code === '23P01') {
       // unique_violation / exclusion_violation
-      const conflict = conflictColumns(
+      const columns = conflictColumns(
         error.detail,
         options?.exposeConflictColumns,
       )
       feathersError = new Conflict(
         safe,
-        conflict.length ? { conflict } : undefined,
+        columns.length ? { columns } : undefined,
       )
     } else {
       switch (error.code.slice(0, 2)) {

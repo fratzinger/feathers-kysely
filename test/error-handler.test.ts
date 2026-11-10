@@ -232,7 +232,7 @@ describe('Kysely Error handler', () => {
       )
 
       assert.strictEqual(err.name, 'Conflict')
-      assert.deepStrictEqual(err.data, { conflict: ['email'] })
+      assert.deepStrictEqual(err.data, { columns: ['email'] })
       assert.ok(!JSON.stringify(err.data).includes('a@b.c'))
       assert.ok(!err.message.includes('a@b.c'))
     })
@@ -255,7 +255,7 @@ describe('Kysely Error handler', () => {
         ['room'],
       )
 
-      assert.deepStrictEqual(err.data, { conflict: ['room'] })
+      assert.deepStrictEqual(err.data, { columns: ['room'] })
     })
 
     it('names no column of an index on an expression', () => {
