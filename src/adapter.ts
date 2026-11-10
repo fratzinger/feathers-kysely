@@ -112,7 +112,7 @@ export class KyselyAdapter<
    * Postgres message keeps declared column names but strips other identifiers.
    */
   private handleError = (error: any): never =>
-    errorHandler(error, this.propertyMap)
+    errorHandler(error, this.propertyMap, this.options)
 
   declare app: any
 

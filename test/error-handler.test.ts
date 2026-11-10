@@ -206,6 +206,68 @@ describe('Kysely Error handler', () => {
     })
   })
 
+  describe('the columns a unique violation names', () => {
+    const violation = (detail: string, code = '23505') => ({
+      code,
+      message:
+        'duplicate key value violates unique constraint "items_email_tenant_key"',
+      detail,
+      severity: 'ERROR',
+      routine: '_bt_check_unique',
+    })
+    const conflictOf = (error: unknown, exposeConflictColumns?: string[]) => {
+      try {
+        errorHandler(error, new Set(['email', 'tenantId']), {
+          exposeConflictColumns,
+        })
+      } catch (err: any) {
+        return err
+      }
+    }
+
+    it('names the exposed ones, never their values', () => {
+      const err = conflictOf(
+        violation('Key (email, "tenantId")=(a@b.c, 7) already exists.'),
+        ['email'],
+      )
+
+      assert.strictEqual(err.name, 'Conflict')
+      assert.deepStrictEqual(err.data, { conflict: ['email'] })
+      assert.ok(!JSON.stringify(err.data).includes('a@b.c'))
+      assert.ok(!err.message.includes('a@b.c'))
+    })
+
+    it('names none without the option, or with none of them exposed', () => {
+      const error = violation(
+        'Key (email, "tenantId")=(a@b.c, 7) already exists.',
+      )
+
+      assert.strictEqual(conflictOf(error).data, undefined)
+      assert.strictEqual(conflictOf(error, ['name']).data, undefined)
+    })
+
+    it('names the columns of an exclusion violation too', () => {
+      const err = conflictOf(
+        violation(
+          'Key (room, during)=(1, [2020-01-01,2020-01-02)) conflicts with existing key (room, during)=(1, [2020-01-01,2020-01-03)).',
+          '23P01',
+        ),
+        ['room'],
+      )
+
+      assert.deepStrictEqual(err.data, { conflict: ['room'] })
+    })
+
+    it('names no column of an index on an expression', () => {
+      const err = conflictOf(
+        violation('Key (lower(email::text))=(a@b.c) already exists.'),
+        ['email'],
+      )
+
+      assert.strictEqual(err.data, undefined)
+    })
+  })
+
   describe('non-database and Feathers errors', () => {
     it('passes an existing FeathersError through unchanged', () => {
       assert.throws(() => errorHandler(new BadRequest('nope')), {

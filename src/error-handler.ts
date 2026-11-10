@@ -36,6 +36,33 @@ function sanitizePgMessage(
     .trim()
 }
 
+export interface ErrorHandlerOptions {
+  /**
+   * The columns a unique or exclusion violation may name to the client, in
+   * `Conflict#data.conflict`. Naming one can reveal that a value exists (an
+   * email, a token), so none are by default. Postgres only.
+   */
+  exposeConflictColumns?: readonly string[]
+}
+
+// `Key (email, "tenantId")=(...)`: the columns of the violated key, before its values
+const PG_CONFLICT_KEY = /^Key \((.+?)\)=\(/
+const PG_QUOTED = /^"(.*)"$/
+
+/** The exposed columns a violation's `detail` names, never their values. */
+function conflictColumns(
+  detail: unknown,
+  exposed: readonly string[] | undefined,
+): string[] {
+  if (!exposed?.length || typeof detail !== 'string') return []
+  const key = PG_CONFLICT_KEY.exec(detail)?.[1]
+  if (!key) return []
+  return key
+    .split(', ')
+    .map((column) => column.replace(PG_QUOTED, '$1'))
+    .filter((column) => exposed.includes(column))
+}
+
 /**
  * Convert a database error into a Feathers error.
  *
@@ -47,6 +74,7 @@ function sanitizePgMessage(
 export function errorHandler(
   error: any,
   knownColumns?: { has(name: string): boolean },
+  options?: ErrorHandlerOptions,
 ): never {
   const { message } = error
   let feathersError = error
@@ -120,7 +148,14 @@ export function errorHandler(
 
     if (error.code === '23505' || error.code === '23P01') {
       // unique_violation / exclusion_violation
-      feathersError = new Conflict(safe)
+      const conflict = conflictColumns(
+        error.detail,
+        options?.exposeConflictColumns,
+      )
+      feathersError = new Conflict(
+        safe,
+        conflict.length ? { conflict } : undefined,
+      )
     } else {
       switch (error.code.slice(0, 2)) {
         case '22':
