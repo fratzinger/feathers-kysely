@@ -1238,6 +1238,7 @@ export class KyselyAdapter<
     // mysql does not allow sophisticated where in update/delete statements
     // so we need to do a find/get first to get the ids
 
+    // `_get` throws NotFound for a missing row itself; any other error is the caller's to see
     if (id !== null) {
       const result = await this._get(id, {
         ...params,
@@ -1245,8 +1246,6 @@ export class KyselyAdapter<
           ...params.query,
           $select: $select || params.query?.$select,
         },
-      }).catch(() => {
-        throw new NotFound(`No record found for ${idField} '${id}'`)
       })
 
       const withWhere = (q as any).where(this.col(idField), '=', id)

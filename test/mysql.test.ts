@@ -1,6 +1,7 @@
 import type { Generated } from 'kysely'
 import { Kysely } from 'kysely'
 import { feathers } from '@feathersjs/feathers'
+import { GeneralError } from '@feathersjs/errors'
 import dialect, { getDialect } from './dialect.js'
 
 import { KyselyService } from '../src/index.js'
@@ -147,5 +148,19 @@ describe.skipIf(dialectName !== 'mysql')('mysql write path', () => {
 
     expect(created.code).toBe('single-1')
     expect(created.label).toBe('only')
+  })
+
+  // patch and remove by id read the row first; a store that fails there is no missing row
+  it('patch and remove by id pass a failed read on instead of NotFound', async () => {
+    const service = app.service('mysql_users')
+    const { id } = await service.create({ name: 'Dave', age: 40 })
+    const failingRead = Object.assign(Object.create(service), {
+      _get: () => Promise.reject(new GeneralError('Store gone')),
+    })
+
+    await expect(failingRead._patch(id, { age: 41 })).rejects.toThrow(
+      GeneralError,
+    )
+    await expect(failingRead._remove(id)).rejects.toThrow(GeneralError)
   })
 })
